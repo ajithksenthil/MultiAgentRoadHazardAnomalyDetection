@@ -32,7 +32,8 @@ in certain areas, street hazards, dynamic weather conditions, varying traffic sc
 - Collaborative Detection: Multiple agents work in tandem to detect anomalies. The experiment evaluates how well agents can collaborate, avoid redundancy, and optimize their paths for efficient anomaly detection.
 # V. INTERMEDIATE/PRELIMINARY RESULTS
 At this milestone, no results have been achieved as of yet, however preliminary experiments are being conducted on the ’StreetHazards’ dataset to test the DAI algorithm at anomaly detection. This is particularly useful as the dataset was created in the CARLA simulation environment and anomaly detection is a specific use case for this dataset. Once that is complete, the CARLA simulation environment will be set up and the integration with the multi-agent SAC algorithm will be imple- mented and experiments in there will be conducted.
-REFERENCES
+
+# REFERENCES
 [1] CARLA Simulator. CARLA: An Open Urban Driving Simulator. Avail- able at: http://carla.org/
 [2] Bogdoll, D., Uhlemeyer, S., Kowol, K., & Zo ̈llner, J. M. Perception Datasets for Anomaly Detection in Autonomous Driving: A Survey. 2023 IEEE Intelligent Vehicles Symposium (IV), pages 1–8, 2023. https://doi.org/10.1109/IV55152.2023.10186609
 [3] G. Joseph, C. Zhong, M. C. Gursoy, S. Velipasalar, and P. K. Varsh- ney, ”Anomaly Detection via Controlled Sensing and Deep Active In- ference,” arXiv preprint arXiv:2105.06288, 2021. [Online]. Available: https://doi.org/10.48550/arXiv.2105.06288
