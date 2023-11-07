@@ -26,7 +26,8 @@ class StreetHazardsDataset(Dataset):
         
         if self.transform:
             image = self.transform(image)
-            anomaly_mask = torch.tensor(anomaly_mask, dtype=torch.float32)
+            anomaly_mask = torch.tensor(anomaly_mask, dtype=torch.float32).unsqueeze(0)  # Add channel dimension
+
             
         return image, anomaly_mask
 
@@ -46,13 +47,13 @@ dataset = StreetHazardsDataset(image_dir, annotation_dir, transform=transform)
 batch_size = 32
 data_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
-# Visualize an example
-example_image, example_mask = dataset[0]
-plt.figure(figsize=(10, 5))
-plt.subplot(1, 2, 1)
-plt.imshow(example_image.permute(1, 2, 0).numpy())
-plt.title('Image')
-plt.subplot(1, 2, 2)
-plt.imshow(example_mask.numpy(), cmap='gray')
-plt.title('Anomaly Mask')
-plt.show()
+# # Visualize an example
+# example_image, example_mask = dataset[0]
+# plt.figure(figsize=(10, 5))
+# plt.subplot(1, 2, 1)
+# plt.imshow(example_image.permute(1, 2, 0).numpy())
+# plt.title('Image')
+# plt.subplot(1, 2, 2)
+# plt.imshow(example_mask.numpy(), cmap='gray')
+# plt.title('Anomaly Mask')
+# plt.show()
