@@ -144,6 +144,108 @@ def compute_actual_efe(current_belief, target_belief):
     return efe
 
 
+# def get_target_belief(actions, masks):
+#     """
+#     Given actions and masks, compute the target beliefs for those actions.
+    
+#     Parameters:
+#     - actions (torch.Tensor): The actions taken, determining the region of the image for each instance in the batch.
+#     - masks (torch.Tensor): The mask (annotation) images for the batch.
+    
+#     Returns:
+#     - target_beliefs (torch.Tensor): The computed beliefs (distribution of classes) for the action's region for each instance in the batch.
+#     """
+#     target_beliefs = []
+    
+#     for i in range(actions.size(0)):  # Loop over each example in the batch
+#         action = actions[i].item()  # Get the action for the current example
+#         mask = masks[i]  # Get the mask for the current example
+        
+#         # Squeeze out the channel dimension if present
+#         if mask.dim() == 3 and mask.size(0) == 1:
+#             mask = mask.squeeze(0)
+
+#         h, w = mask.shape[-2], mask.shape[-1]  # Height and width of the mask
+        
+#         if action == 0:  # top-left quadrant
+#             roi_mask = mask[:h//2, :w//2]
+#         elif action == 1:  # top-right quadrant
+#             roi_mask = mask[:h//2, w//2:]
+#         elif action == 2:  # bottom-left quadrant
+#             roi_mask = mask[h//2:, :w//2]
+#         elif action == 3:  # bottom-right quadrant
+#             roi_mask = mask[h//2:, w//2:]
+#         else:
+#             raise ValueError("Invalid action!")
+        
+#         roi_mask = roi_mask.long()  # Convert to long to get integer values
+    
+#         # Count the number of pixels for each class in the region of interest
+#         class_counts = torch.bincount(roi_mask.view(-1), minlength=13)  # Assuming 13 classes
+#         target_belief = class_counts.float() / class_counts.sum()
+#         target_beliefs.append(target_belief)
+    
+#     return torch.stack(target_beliefs)  # Combine all target beliefs into a single tensor
+
+# def get_target_belief(actions, masks):
+#     """
+#     Given actions and masks, compute the target beliefs for those actions.
+    
+#     Parameters:
+#     - actions (torch.Tensor): The actions taken, determining the region of the image for each instance in the batch.
+#     - masks (torch.Tensor): The mask (annotation) images for the batch.
+    
+#     Returns:
+#     - target_beliefs (torch.Tensor): The computed beliefs (distribution of classes) for the action's region for each instance in the batch.
+#     """
+#     target_beliefs = []
+    
+#     for i in range(actions.size(0)):  # Loop over each example in the batch
+#         action = actions[i].item()  # Get the action for the current example
+#         mask = masks[i]  # Get the mask for the current example
+        
+#         # Squeeze out the channel dimension if present
+#         if mask.dim() == 3 and mask.size(0) == 1:
+#             mask = mask.squeeze(0)
+
+#         h, w = mask.shape[-2], mask.shape[-1]  # Height and width of the mask
+        
+#         # Determine the region of interest based on the action
+#         if action == 0:  # top-left quadrant
+#             roi_mask = mask[:h//2, :w//2]
+#         elif action == 1:  # top-right quadrant
+#             roi_mask = mask[:h//2, w//2:]
+#         elif action == 2:  # bottom-left quadrant
+#             roi_mask = mask[h//2:, :w//2]
+#         elif action == 3:  # bottom-right quadrant
+#             roi_mask = mask[h//2:, w//2:]
+#         else:
+#             raise ValueError("Invalid action!")
+        
+#         roi_mask = roi_mask.long()  # Convert to long to get integer values
+    
+#         # Check for any invalid class indices
+#         if roi_mask.min() < 0 or roi_mask.max() >= 13:
+#             raise ValueError(f"Mask contains invalid class indices: min={roi_mask.min()}, max={roi_mask.max()}")
+
+#         # Count the number of pixels for each class in the region of interest
+#         class_counts = torch.bincount(roi_mask.view(-1), minlength=13)  # Assuming 13 classes
+        
+#         # Check for the sum being zero before division
+#         if class_counts.sum() == 0:
+#             raise ValueError("The sum of class counts is zero, indicating an empty region of interest.")
+        
+#         # Compute the belief for the current example
+#         target_belief = class_counts.float() / class_counts.sum()
+        
+#         # Check for NaN values
+#         if torch.isnan(target_belief).any():
+#             raise ValueError("NaN values encountered in target_belief.")
+        
+#         target_beliefs.append(target_belief)
+    
+#     return torch.stack(target_beliefs)  # Combine all target beliefs into a single tensor
+
 def get_target_belief(actions, masks):
     """
     Given actions and masks, compute the target beliefs for those actions.
@@ -167,6 +269,7 @@ def get_target_belief(actions, masks):
 
         h, w = mask.shape[-2], mask.shape[-1]  # Height and width of the mask
         
+        # Determine the region of interest based on the action
         if action == 0:  # top-left quadrant
             roi_mask = mask[:h//2, :w//2]
         elif action == 1:  # top-right quadrant
@@ -177,15 +280,28 @@ def get_target_belief(actions, masks):
             roi_mask = mask[h//2:, w//2:]
         else:
             raise ValueError("Invalid action!")
+
+        if roi_mask.numel() == 0:
+            # Handle the empty ROI case appropriately
+            # One option could be to return a uniform distribution over classes
+            target_belief = torch.ones(13) / 13
+        else:
+            roi_mask = roi_mask.long()  # Convert to long to get integer values
         
-        roi_mask = roi_mask.long()  # Convert to long to get integer values
-    
-        # Count the number of pixels for each class in the region of interest
-        class_counts = torch.bincount(roi_mask.view(-1), minlength=13)  # Assuming 13 classes
-        target_belief = class_counts.float() / class_counts.sum()
+            # Count the number of pixels for each class in the region of interest
+            class_counts = torch.bincount(roi_mask.view(-1), minlength=13)  # Assuming 13 classes
+
+            # Compute the belief for the current example
+            target_belief = class_counts.float() / class_counts.sum()
+        
+        # Check for NaN values just in case
+        if torch.isnan(target_belief).any():
+            raise ValueError("NaN values encountered in target_belief.")
+        
         target_beliefs.append(target_belief)
     
     return torch.stack(target_beliefs)  # Combine all target beliefs into a single tensor
+
 
 if __name__ == "__main__":
   
