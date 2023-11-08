@@ -1,4 +1,4 @@
-# Multi-Agent Surveillance and Anomaly Detection in Autonomous Vehicle Environments using Deep Active Inference and Soft Actor-Critic
+# Multi-Agent Road Hazard Anomaly Detection in Autonomous Vehicle Environments using Deep Active Inference and Soft Actor-Critic
 # I. INTRODUCTION
 Ajith Senthil
 architectures perform in robot learning settings
