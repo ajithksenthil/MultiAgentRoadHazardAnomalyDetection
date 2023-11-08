@@ -31,26 +31,6 @@ class BootstrappedEFENetwork(nn.Module):
         x = self.fc2(x)
         return x
 
-# class BootstrappedEFENetwork(nn.Module):
-#     """
-#     Neural network to represent the bootstrapped Expected Free Energy (EFE).
-#     """
-#     def __init__(self, input_dim, hidden_dim):
-#         super(BootstrappedEFENetwork, self).__init__()
-#         self.fc1 = nn.Linear(input_dim, hidden_dim)
-#         self.fc2 = nn.Linear(hidden_dim, 1) # Outputs a single scalar representing EFE
-    
-#     def forward(self, pi, action):
-#         # pi is the belief state
-#         # action is the action taken
-#         # Combine the belief state and action in a way that makes sense for your network
-#         # This might be concatenation, or the action might modulate the input in some way
-#         x = torch.cat((pi, action), dim=-1)
-        
-#         x = torch.relu(self.fc1(x))
-#         x = self.fc2(x)
-#         return x
-
 class CNNEncoder(nn.Module):
     def __init__(self):
         super(CNNEncoder, self).__init__()

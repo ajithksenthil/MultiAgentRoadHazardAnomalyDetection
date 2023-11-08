@@ -38,14 +38,20 @@ transform = transforms.Compose([
     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
 ])
 
-# Create dataset
+# Create training dataset
 image_dir = 'train/images/training/t1-3'
 annotation_dir = 'train/annotations/training/t1-3'
 dataset = StreetHazardsDataset(image_dir, annotation_dir, transform=transform)
 
+# validation data set
+image_validation_dir = 'train/images/validation/t4'
+annotation_validation_dir = 'train/annotations/validation/t4'
+val_dataset = StreetHazardsDataset(image_validation_dir, annotation_validation_dir, transform=transform)
+
 # Create data loader
 batch_size = 32
 data_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 
 # # Visualize an example
 # example_image, example_mask = dataset[0]

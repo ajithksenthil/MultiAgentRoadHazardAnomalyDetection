@@ -7,6 +7,7 @@ from torch.utils.data import DataLoader
 from torchvision import transforms
 # Add more imports as necessary, for example, for your dataset, models, etc.
 from data_loader import StreetHazardsDataset, transform
+from data_loader import val_loader # data_loader should be imported and taken out of the training script 
 from models import CNNEncoder, PolicyNetwork, BootstrappedEFENetwork
 
 import torchvision.models as models
@@ -56,16 +57,6 @@ class BeliefUpdateNetwork(nn.Module):
 def compute_entropy(pi):
     return -torch.sum(pi * torch.log(pi + 1e-10), dim=1)
 
-# def compute_free_energy(q, Q):
-#     entropy_q = compute_entropy(q)
-#     kl_term = torch.sum(q * torch.log((q + 1e-10) / (Q + 1e-10)), dim=1)
-#     return -entropy_q - kl_term
-
-# def compute_free_energy(q, Q):
-#     Q = Q.expand(q.size(0), -1)  # Expand Q to match the batch size of q
-#     entropy_q = compute_entropy(q)
-#     kl_term = torch.sum(q * torch.log((q + 1e-10) / (Q + 1e-10)), dim=1)
-#     return -entropy_q - kl_term
 
 def compute_free_energy(q, Q_actions_batch):
     entropy_q = compute_entropy(q)
@@ -121,13 +112,6 @@ def update_belief(current_belief, observation):
     return combined_belief
 
 
-# def compute_actual_efe(current_belief, target_belief):
-#     # Assuming EFE is the KL divergence between current and target beliefs
-#     # This is a simple example; in practice, EFE can be more complex.
-    
-#     kl_div = nn.KLDivLoss()
-#     efe = kl_div(torch.log(current_belief + 1e-10), target_belief)
-#     return efe
 
 def compute_actual_efe(current_belief, target_belief):
     # Ensure target_belief is a valid probability distribution
@@ -143,108 +127,6 @@ def compute_actual_efe(current_belief, target_belief):
 
     return efe
 
-
-# def get_target_belief(actions, masks):
-#     """
-#     Given actions and masks, compute the target beliefs for those actions.
-    
-#     Parameters:
-#     - actions (torch.Tensor): The actions taken, determining the region of the image for each instance in the batch.
-#     - masks (torch.Tensor): The mask (annotation) images for the batch.
-    
-#     Returns:
-#     - target_beliefs (torch.Tensor): The computed beliefs (distribution of classes) for the action's region for each instance in the batch.
-#     """
-#     target_beliefs = []
-    
-#     for i in range(actions.size(0)):  # Loop over each example in the batch
-#         action = actions[i].item()  # Get the action for the current example
-#         mask = masks[i]  # Get the mask for the current example
-        
-#         # Squeeze out the channel dimension if present
-#         if mask.dim() == 3 and mask.size(0) == 1:
-#             mask = mask.squeeze(0)
-
-#         h, w = mask.shape[-2], mask.shape[-1]  # Height and width of the mask
-        
-#         if action == 0:  # top-left quadrant
-#             roi_mask = mask[:h//2, :w//2]
-#         elif action == 1:  # top-right quadrant
-#             roi_mask = mask[:h//2, w//2:]
-#         elif action == 2:  # bottom-left quadrant
-#             roi_mask = mask[h//2:, :w//2]
-#         elif action == 3:  # bottom-right quadrant
-#             roi_mask = mask[h//2:, w//2:]
-#         else:
-#             raise ValueError("Invalid action!")
-        
-#         roi_mask = roi_mask.long()  # Convert to long to get integer values
-    
-#         # Count the number of pixels for each class in the region of interest
-#         class_counts = torch.bincount(roi_mask.view(-1), minlength=13)  # Assuming 13 classes
-#         target_belief = class_counts.float() / class_counts.sum()
-#         target_beliefs.append(target_belief)
-    
-#     return torch.stack(target_beliefs)  # Combine all target beliefs into a single tensor
-
-# def get_target_belief(actions, masks):
-#     """
-#     Given actions and masks, compute the target beliefs for those actions.
-    
-#     Parameters:
-#     - actions (torch.Tensor): The actions taken, determining the region of the image for each instance in the batch.
-#     - masks (torch.Tensor): The mask (annotation) images for the batch.
-    
-#     Returns:
-#     - target_beliefs (torch.Tensor): The computed beliefs (distribution of classes) for the action's region for each instance in the batch.
-#     """
-#     target_beliefs = []
-    
-#     for i in range(actions.size(0)):  # Loop over each example in the batch
-#         action = actions[i].item()  # Get the action for the current example
-#         mask = masks[i]  # Get the mask for the current example
-        
-#         # Squeeze out the channel dimension if present
-#         if mask.dim() == 3 and mask.size(0) == 1:
-#             mask = mask.squeeze(0)
-
-#         h, w = mask.shape[-2], mask.shape[-1]  # Height and width of the mask
-        
-#         # Determine the region of interest based on the action
-#         if action == 0:  # top-left quadrant
-#             roi_mask = mask[:h//2, :w//2]
-#         elif action == 1:  # top-right quadrant
-#             roi_mask = mask[:h//2, w//2:]
-#         elif action == 2:  # bottom-left quadrant
-#             roi_mask = mask[h//2:, :w//2]
-#         elif action == 3:  # bottom-right quadrant
-#             roi_mask = mask[h//2:, w//2:]
-#         else:
-#             raise ValueError("Invalid action!")
-        
-#         roi_mask = roi_mask.long()  # Convert to long to get integer values
-    
-#         # Check for any invalid class indices
-#         if roi_mask.min() < 0 or roi_mask.max() >= 13:
-#             raise ValueError(f"Mask contains invalid class indices: min={roi_mask.min()}, max={roi_mask.max()}")
-
-#         # Count the number of pixels for each class in the region of interest
-#         class_counts = torch.bincount(roi_mask.view(-1), minlength=13)  # Assuming 13 classes
-        
-#         # Check for the sum being zero before division
-#         if class_counts.sum() == 0:
-#             raise ValueError("The sum of class counts is zero, indicating an empty region of interest.")
-        
-#         # Compute the belief for the current example
-#         target_belief = class_counts.float() / class_counts.sum()
-        
-#         # Check for NaN values
-#         if torch.isnan(target_belief).any():
-#             raise ValueError("NaN values encountered in target_belief.")
-        
-#         target_beliefs.append(target_belief)
-    
-#     return torch.stack(target_beliefs)  # Combine all target beliefs into a single tensor
 
 def get_target_belief(actions, masks):
     """
@@ -324,12 +206,7 @@ if __name__ == "__main__":
     feature_extractor = FeatureExtractor().to(device)
     belief_update = BeliefUpdateNetwork(input_dim, hidden_dim, output_dim=13).to(device)
     combined_input_dim = cnn_output_dim + output_dim_belief
-    # policy_network = PolicyNetwork(input_dim=combined_input_dim, hidden_dim=hidden_dim, output_dim=output_dim_policy).to(device)
-
-    # # policy_network = PolicyNetwork(input_dim=13, hidden_dim=hidden_dim, output_dim=output_dim_policy).to(device)
-    # # efe_network = BootstrappedEFENetwork(input_dim + num_actions, hidden_dim).to(device)
-    # efe_network = BootstrappedEFENetwork(17, hidden_dim).to(device)
-
+ 
     # Correct initialization of the policy network
     policy_network = PolicyNetwork(input_dim=output_dim_belief, hidden_dim=hidden_dim, output_dim=output_dim_policy).to(device)
 
@@ -363,6 +240,11 @@ if __name__ == "__main__":
     torch.autograd.set_detect_anomaly(True)
     # Simplified training loop for testing
     for epoch in range(num_epochs):
+        # During training, set models to training mode
+        feature_extractor.train()
+        belief_update.train()
+        policy_network.train()
+        efe_network.train()
         for batch_idx, (image, mask) in enumerate(data_loader):
             mask = mask.unsqueeze(1)  # Add a channel dimension if not already present
             
@@ -373,7 +255,6 @@ if __name__ == "__main__":
             mask = mask.to(device)
             # Forward pass through the network
             features = feature_extractor(image, mask)
-            # pi_prev = belief_update(features)
             print("Features shape:", features.shape)
             pi_prev = belief_update(features)
             print("pi_prev shape:", pi_prev.shape)
@@ -390,15 +271,14 @@ if __name__ == "__main__":
             pi_current = update_belief(pi_prev, observation)
             # Concatenate along the appropriate dimension if needed
             input_to_efe = torch.cat((pi_current, action_one_hot), dim=1)
-            # G_phi = efe_network(pi_current, action)
+        
             G_phi = efe_network(input_to_efe)
             target_belief = get_target_belief(action, mask)
             print("pi_current shape:", pi_current.shape)
             print("target_belief shape:", target_belief.shape)  
 
             G = compute_actual_efe(pi_current, target_belief)
-            # Q_batch = Q.unsqueeze(0).repeat(q.size(0), 1)
-            # F = compute_free_energy(q, Q_batch)  # Now Q_batch is aligned with q
+            
             Q_batch = Q.unsqueeze(0).repeat(image.size(0), 1)  # Expand Q for each batch
             print("Q_batch shape:", Q_batch.shape)  # Should be (batch_size, num_classes)
 
@@ -406,20 +286,9 @@ if __name__ == "__main__":
             Q_actions_batch = Q_actions.expand(q.size(0), -1)  # Expand Q_actions to match the batch size of q
 
 
-            # F = compute_free_energy(q, Q_batch)  # Now Q_batch is aligned with q
+            # Now Q_batch is aligned with q
             F = compute_free_energy(q, Q_actions_batch)
 
-            # F = compute_free_energy(q, Q)  # Q needs to be defined based on your data/model
-
-            # # Loss calculation and backpropagation
-            # loss_policy = policy_loss(F)
-            # loss_efe = efe_loss(G_phi, G)
-            # total_loss = loss_policy + loss_efe
-            # optimizer_policy.zero_grad()
-            # optimizer_efe.zero_grad()
-            # total_loss.backward()
-            # optimizer_policy.step()
-            # optimizer_efe.step()
             print("current_belief:", pi_current)
             print("target_belief:", target_belief)
             assert not torch.isnan(target_belief).any(), "NaNs in target_belief"
@@ -461,7 +330,61 @@ if __name__ == "__main__":
             optimizer_efe.step()
 
 
-            # Print loss every iteration for monitoring
+            # Print training loss every iteration for monitoring
             print(f"Epoch: {epoch+1}, Batch: {batch_idx+1}, Loss: {total_loss.item()}")
+        
+        
+        print("Training test completed.")
 
-    print("Training test completed.")
+        # validation loop, complete the validation code here
+        # During validation, set models to evaluation mode
+        feature_extractor.eval()
+        belief_update.eval()
+        policy_network.eval()
+        efe_network.eval()
+
+        with torch.no_grad():  # Turn off gradients for validation
+            # validation loop code based on the previous training code
+            # After each training epoch, run a validation pass
+            validation_loss = 0.0
+            num_validation_batches = len(val_loader)  # Assuming you have a val_loader
+
+            for batch_idx, (image, mask) in enumerate(val_loader):
+                image = image.to(device)
+                mask = mask.to(device)
+                mask = mask.unsqueeze(1)  # Add a channel dimension if not already present
+
+                # Forward pass through the network
+                features = feature_extractor(image, mask)
+                pi_prev = belief_update(features)
+                q = policy_network(pi_prev)
+                action = torch.argmax(q, dim=1)
+                action_one_hot = torch.nn.functional.one_hot(action, num_classes=num_actions)
+
+                observation = get_observation(action, image, mask, feature_extractor)
+                pi_current = update_belief(pi_prev, observation)
+                input_to_efe = torch.cat((pi_current, action_one_hot), dim=1)
+
+                G_phi = efe_network(input_to_efe)
+                target_belief = get_target_belief(action, mask)
+                G = compute_actual_efe(pi_current, target_belief)
+
+                Q_batch = Q.unsqueeze(0).repeat(image.size(0), 1)
+                Q_actions = torch.full((num_actions,), fill_value=1.0/num_actions)
+                Q_actions_batch = Q_actions.expand(q.size(0), -1)
+                F = compute_free_energy(q, Q_actions_batch)
+
+                # Calculate validation loss (without backpropagation and optimization)
+                loss_policy = policy_loss(F).mean()
+                loss_efe = efe_loss(G_phi, G).mean()
+                total_loss = loss_policy + loss_efe
+
+                validation_loss += total_loss.item()  # Sum up the loss for averaging
+
+                # Optionally, print validation loss every iteration for monitoring
+                print(f"Validation - Epoch: {epoch+1}, Batch: {batch_idx+1}, Loss: {total_loss.item()}")
+
+            # Compute the average validation loss
+            average_validation_loss = validation_loss / num_validation_batches
+            print(f"Average Validation Loss for Epoch {epoch+1}: {average_validation_loss}")
+
