@@ -6,8 +6,10 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 from torchvision import transforms
 # Add more imports as necessary, for example, for your dataset, models, etc.
-from data_loader import StreetHazardsDataset, transform
-from data_loader import val_loader # data_loader should be imported and taken out of the training script 
+from gcp_data_loader import StreetHazardsDataset, transform
+from gcp_data_loader import val_loader # data_loader should be imported and taken out of the training script 
+# from gcp_data_loader_(1) import StreetHazardsDataset, transform
+# from gcp_data_loader_(1) import val_loader # data_loader should be imported and taken out of the training script 
 from models import CNNEncoder, PolicyNetwork, BootstrappedEFENetwork
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 
@@ -22,29 +24,31 @@ logging.basicConfig(level=logging.INFO)
 class FeatureExtractor(nn.Module):
     def __init__(self):
         super(FeatureExtractor, self).__init__()
+        # self.image_feature_extractor = models.resnet18(pretrained=True)
         self.image_feature_extractor = resnet18(weights=ResNet18_Weights.IMAGENET1K_V1)
         self.image_feature_extractor = nn.Sequential(*list(self.image_feature_extractor.children())[:-1])  # Remove the last FC layer
         print(self.image_feature_extractor)  # Debug: Print the model architecture
 
-    def forward(self, image, anomaly_mask):
+    def forward(self, image, mask):
         image_features = self.image_feature_extractor(image)
         image_features = image_features.view(image_features.size(0), -1)  # Flatten
+        # print(f"Image features shape: {image_features.shape}")  # Debug print
         print(f"Image features shape: {image_features.shape}")  # Debug print
         print(f"Image features mean: {image_features.mean()}, std: {image_features.std()}")  # Debug stats
         
-        anomaly_hist = []
-        for m in anomaly_mask:
-            hist = torch.histc(m.float(), bins=2, min=0, max=1)  # Histogram for binary anomaly mask
-            anomaly_hist.append(hist)
-        anomaly_features = torch.stack(anomaly_hist)
-        print(f"Anomaly histogram shape: {anomaly_features.shape}")  # Debug print
-        print(f"Anomaly histogram sample: {anomaly_features[0]}")  # Example histogram
+        mask_hist = []
+        for m in mask:
+            hist = torch.histc(m.float(), bins=13, min=0, max=12)
+            mask_hist.append(hist)
+        mask_features = torch.stack(mask_hist)
+        # print(f"Mask features shape: {mask_features.shape}")  # Debug print
+        print(f"Mask histogram shape: {mask_features.shape}")  # Debug print
+        print(f"Mask histogram sample: {mask_features[0]}")  # Example histogram
         
-        combined_features = torch.cat([image_features, anomaly_features], dim=1)
+        combined_features = torch.cat([image_features, mask_features], dim=1)
         print(f"Combined features shape: {combined_features.shape}")  # Debug print
-
+        # print(f"Combined features shape: {combined_features.shape}")  # Debug print
         return combined_features
-
 
 
 class BeliefUpdateNetwork(nn.Module):
@@ -226,29 +230,19 @@ if __name__ == "__main__":
     optimizer_efe = optim.Adam(efe_network.parameters(), lr=learning_rate)
     
     # Create dataset
-    image_dir = 'train/images/training/t1-3'
-    annotation_dir = 'train/annotations/training/t1-3'
+    image_dir = 'train/train/images/training/t1-3'
+    annotation_dir = 'train/train/annotations/training/t1-3'
     dataset = StreetHazardsDataset(image_dir, annotation_dir, transform=transform)
 
     # Create data loader
     batch_size = 32
     data_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
     
-    # # Compute Q from the training data
-    # class_counts = torch.zeros(13)  # Assuming 13 classes
-    # for _, mask in data_loader:
-    #     class_counts += torch.bincount(mask.view(-1).long(), minlength=13)
-    # Q = class_counts / class_counts.sum()
-
-    class_counts = torch.zeros(2)  # Two classes: 0 for normal, 1 for anomaly
-    for _, _, anomaly_mask in data_loader:
-        anomaly_mask_flat = anomaly_mask.view(-1)  # Flatten the mask
-        class_counts += torch.bincount(anomaly_mask_flat.long(), minlength=2)
+    # Compute Q from the training data
+    class_counts = torch.zeros(13)  # Assuming 13 classes
+    for _, mask in data_loader:
+        class_counts += torch.bincount(mask.view(-1).long(), minlength=13)
     Q = class_counts / class_counts.sum()
-
-    print("Q:", Q)  # Q should be a tensor of shape [2]
-
-
 
     print("Q shape:", Q.shape)  # Should be (num_classes,)
 
@@ -264,13 +258,7 @@ if __name__ == "__main__":
         belief_update.train()
         policy_network.train()
         efe_network.train()
-        for batch_idx, (image, segmentation_mask, mask) in enumerate(data_loader):
-            # Inspect the unique values in the first few masks of the batch
-            if batch_idx == 0:  # Check only for the first batch of each epoch
-                for i, m in enumerate(mask[:5]):  # Checking the first 5 masks
-                    unique_values = torch.unique(m)
-                    print(f"Unique values in mask {i}: {unique_values}")
-
+        for batch_idx, (image, mask) in enumerate(data_loader):
             mask = mask.unsqueeze(1)  # Add a channel dimension if not already present
             
             # if batch_idx >= test_batches:  # Only run a few batches for testing
@@ -347,7 +335,9 @@ if __name__ == "__main__":
             torch.nn.utils.clip_grad_norm_(policy_network.parameters(), max_norm=1.0)
             torch.nn.utils.clip_grad_norm_(efe_network.parameters(), max_norm=1.0)
 
-        
+            # # Backpropagation
+            # total_loss.backward()
+
             # Perform a step of the optimizer
             optimizer_policy.step()
             optimizer_efe.step()
@@ -376,7 +366,7 @@ if __name__ == "__main__":
             true_labels = []
             predicted_labels = []
 
-            for batch_idx, (image, segmentation_mask, mask) in enumerate(val_loader):
+            for batch_idx, (image, mask) in enumerate(val_loader):
                 image = image.to(device)
                 mask = mask.to(device)
                 mask = mask.unsqueeze(1)  # Add a channel dimension if not already present

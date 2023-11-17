@@ -16,20 +16,49 @@ class StreetHazardsDataset(Dataset):
     def __len__(self):
         return len(self.image_files)
     
+
     def __getitem__(self, idx):
         image_path = os.path.join(self.image_dir, self.image_files[idx])
         annotation_path = os.path.join(self.annotation_dir, self.image_files[idx])
         
         image = Image.open(image_path).convert('RGB')
         annotation = Image.open(annotation_path)
-        anomaly_mask = np.array(annotation) == 13  # Anomalies are labeled with 13 in annotations
+        segmentation_mask = np.array(annotation, dtype=np.int64)  # Load full segmentation mask
+        anomaly_mask = (segmentation_mask == 13)  # Anomalies are labeled with 13 in annotations
         
         if self.transform:
             image = self.transform(image)
-            anomaly_mask = torch.tensor(anomaly_mask, dtype=torch.float32).unsqueeze(0)  # Add channel dimension
+            # Convert segmentation_mask to uint8 for PIL processing
+            segmentation_mask_uint8 = segmentation_mask.astype(np.uint8)
+            segmentation_mask_pil = Image.fromarray(segmentation_mask_uint8)
+            segmentation_mask_pil = segmentation_mask_pil.resize((224, 224), Image.NEAREST)  # Use nearest neighbor to avoid interpolation artifacts
+            segmentation_mask = torch.tensor(np.array(segmentation_mask_pil), dtype=torch.long)  # Convert back to tensor
+
+            # Resize anomaly_mask as a PIL image to maintain consistency
+            anomaly_mask_pil = Image.fromarray(anomaly_mask.astype(np.uint8) * 255)
+            anomaly_mask_pil = anomaly_mask_pil.resize((224, 224), Image.NEAREST)
+            anomaly_mask = torch.tensor(np.array(anomaly_mask_pil), dtype=torch.float32).unsqueeze(0) / 255
+
+        return image, segmentation_mask, anomaly_mask
+
+
+
+
+
+    # def __getitem__(self, idx):
+    #     image_path = os.path.join(self.image_dir, self.image_files[idx])
+    #     annotation_path = os.path.join(self.annotation_dir, self.image_files[idx])
+        
+    #     image = Image.open(image_path).convert('RGB')
+    #     annotation = Image.open(annotation_path)
+    #     anomaly_mask = np.array(annotation) == 13  # Anomalies are labeled with 13 in annotations
+        
+    #     if self.transform:
+    #         image = self.transform(image)
+    #         anomaly_mask = torch.tensor(anomaly_mask, dtype=torch.float32).unsqueeze(0)  # Add channel dimension
 
             
-        return image, anomaly_mask
+    #     return image, anomaly_mask
 
 # Define transformations
 transform = transforms.Compose([
@@ -63,3 +92,37 @@ val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 # plt.imshow(example_mask.numpy(), cmap='gray')
 # plt.title('Anomaly Mask')
 # plt.show()
+# Verification code
+if __name__ == "__main__":
+    # Create an instance of your dataset
+    dataset = StreetHazardsDataset(image_dir, annotation_dir, transform=transform)
+
+    # Check a few examples
+    for i in range(3):
+        image, segmentation_mask, anomaly_mask = dataset[i]
+
+        print(f"Image {i}:")
+        print(f"  - Image shape: {image.shape}, type: {image.dtype}")
+        print(f"  - Segmentation mask shape: {segmentation_mask.shape}, unique values: {torch.unique(segmentation_mask)}")
+        print(f"  - Anomaly mask shape: {anomaly_mask.shape}, unique values: {torch.unique(anomaly_mask)}")
+
+        # Visualization
+        plt.figure(figsize=(12, 4))
+        plt.subplot(1, 3, 1)
+        plt.imshow(image.permute(1, 2, 0))
+        plt.title('Image')
+        plt.subplot(1, 3, 2)
+        plt.imshow(segmentation_mask, cmap='gray')
+        plt.title('Segmentation Mask')
+        plt.subplot(1, 3, 3)
+        plt.imshow(anomaly_mask[0], cmap='gray')
+        plt.title('Anomaly Mask')
+        plt.show()
+
+    # DataLoader check
+    data_loader = DataLoader(dataset, batch_size=4, shuffle=True)
+    images, segmentation_masks, anomaly_masks = next(iter(data_loader))
+
+    print(f"Batch of images shape: {images.shape}")
+    print(f"Batch of segmentation masks shape: {segmentation_masks.shape}")
+    print(f"Batch of anomaly masks shape: {anomaly_masks.shape}")
