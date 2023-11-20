@@ -82,23 +82,12 @@ batch_size = 32
 data_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 
-# # Visualize an example
-# example_image, example_mask = dataset[0]
-# plt.figure(figsize=(10, 5))
-# plt.subplot(1, 2, 1)
-# plt.imshow(example_image.permute(1, 2, 0).numpy())
-# plt.title('Image')
-# plt.subplot(1, 2, 2)
-# plt.imshow(example_mask.numpy(), cmap='gray')
-# plt.title('Anomaly Mask')
-# plt.show()
-# Verification code
 if __name__ == "__main__":
     # Create an instance of your dataset
     dataset = StreetHazardsDataset(image_dir, annotation_dir, transform=transform)
 
     # Check a few examples
-    for i in range(3):
+    for i in range(9):
         image, segmentation_mask, anomaly_mask = dataset[i]
 
         print(f"Image {i}:")

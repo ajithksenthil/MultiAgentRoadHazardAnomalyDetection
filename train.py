@@ -18,33 +18,6 @@ import logging
 
 logging.basicConfig(level=logging.INFO)
 
-
-# class FeatureExtractor(nn.Module):
-#     def __init__(self):
-#         super(FeatureExtractor, self).__init__()
-#         self.image_feature_extractor = resnet18(weights=ResNet18_Weights.IMAGENET1K_V1)
-#         self.image_feature_extractor = nn.Sequential(*list(self.image_feature_extractor.children())[:-1])  # Remove the last FC layer
-#         print(self.image_feature_extractor)  # Debug: Print the model architecture
-
-#     def forward(self, image, anomaly_mask):
-#         image_features = self.image_feature_extractor(image)
-#         image_features = image_features.view(image_features.size(0), -1)  # Flatten
-#         print(f"Image features shape: {image_features.shape}")  # Debug print
-#         print(f"Image features mean: {image_features.mean()}, std: {image_features.std()}")  # Debug stats
-        
-#         anomaly_hist = []
-#         for m in anomaly_mask:
-#             hist = torch.histc(m.float(), bins=2, min=0, max=1)  # Histogram for binary anomaly mask
-#             anomaly_hist.append(hist)
-#         anomaly_features = torch.stack(anomaly_hist)
-#         print(f"Anomaly histogram shape: {anomaly_features.shape}")  # Debug print
-#         print(f"Anomaly histogram sample: {anomaly_features[0]}")  # Example histogram
-        
-#         combined_features = torch.cat([image_features, anomaly_features], dim=1)
-#         print(f"Combined features shape: {combined_features.shape}")  # Debug print
-
-#         return combined_features
-
 class FeatureExtractor(nn.Module):
     def __init__(self):
         super(FeatureExtractor, self).__init__()
@@ -116,19 +89,6 @@ def compute_actual_efe(current_belief, target_belief):
     return efe
 
 
-# def compute_actual_efe(current_belief, target_belief):
-#     # Ensure target_belief is a valid probability distribution
-#     target_belief = target_belief.clamp(min=1e-10)
-#     target_belief = target_belief / target_belief.sum(dim=1, keepdim=True)
-
-#     # Use log_softmax for current_belief
-#     log_current_belief = torch.log_softmax(current_belief, dim=1)
-
-#     # Compute KL divergence
-#     kl_div = nn.KLDivLoss(reduction='batchmean')  # change reduction to 'batchmean' if not already
-#     efe = kl_div(log_current_belief, target_belief)
-
-#     return efe
 
 def get_target_belief(anomaly_mask):
     """
@@ -145,34 +105,13 @@ def get_target_belief(anomaly_mask):
     return target_beliefs
 
 
-# def get_target_belief(masks):
-#     """
-#     Given masks, compute the target beliefs indicating the presence of an anomaly.
-    
-#     Parameters:
-#     - masks (torch.Tensor): The mask (annotation) images for the batch.
-    
-#     Returns:
-#     - target_beliefs (torch.Tensor): The computed beliefs indicating the presence (1) or absence (0) of anomalies for each instance in the batch.
-#     """
-#     target_beliefs = []
-
-#     for mask in masks:
-#         # Check if there is any anomaly in the mask
-#         anomaly_present = (mask.any()).float()  # 1 if any anomaly pixel is present, 0 otherwise
-#         target_beliefs.append(anomaly_present)
-
-#     return torch.stack(target_beliefs)
-
-
-
 if __name__ == "__main__":
   
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
     # Hyperparameters
     hidden_dim = 356 # originally 256
-    learning_rate = 0.01
+    learning_rate = 0.005
     num_epochs = 10
     cnn_output_dim = 512  # For ResNet-18 without the final FC layer
     input_dim = cnn_output_dim  # Adjusted for binary classification
@@ -191,11 +130,32 @@ if __name__ == "__main__":
 
     # Correct initialization of the efe network
     # efe_network = BootstrappedEFENetwork(input_dim=cnn_output_dim + 2, hidden_dim=hidden_dim).to(device)
-    efe_network = BootstrappedEFENetwork(input_dim=2, hidden_dim=hidden_dim).to(device)
+    efe_network = BootstrappedEFENetwork(input_dim=4, hidden_dim=hidden_dim).to(device)
 
 
-    optimizer_policy = optim.Adam(policy_network.parameters(), lr=learning_rate)
-    optimizer_efe = optim.Adam(efe_network.parameters(), lr=learning_rate)
+    # optimizer_policy = optim.Adam(policy_network.parameters(), lr=learning_rate)
+    # optimizer_efe = optim.Adam(efe_network.parameters(), lr=learning_rate)
+    # accuracy: epoch: 
+
+    # optimizer_policy = optim.SGD(policy_network.parameters(), lr=0.01, momentum=0.9)
+    # optimizer_efe = optim.SGD(efe_network.parameters(), lr=0.01, momentum=0.9)
+
+    # optimizer_policy = optim.RMSprop(policy_network.parameters(), lr=0.001, alpha=0.99)
+    # optimizer_efe = optim.RMSprop(efe_network.parameters(), lr=0.001, alpha=0.99)
+
+    # optimizer_policy = optim.Adagrad(policy_network.parameters(), lr=0.01)
+    # optimizer_efe = optim.Adagrad(efe_network.parameters(), lr=0.01)
+
+    optimizer_policy = optim.AdamW(policy_network.parameters(), lr=0.001, weight_decay=0.01)
+    optimizer_efe = optim.AdamW(efe_network.parameters(), lr=0.001, weight_decay=0.01)
+
+    # from adabelief_pytorch import AdaBelief
+    # optimizer_policy = AdaBelief(policy_network.parameters(), lr=0.001, eps=1e-16, betas=(0.9, 0.999), weight_decay=0.01)
+    # optimizer_efe = AdaBelief(efe_network.parameters(), lr=0.001, eps=1e-16, betas=(0.9, 0.999), weight_decay=0.01)
+
+
+
+
     
     # Create dataset
     image_dir = 'train/images/training/t1-3'
@@ -224,7 +184,11 @@ if __name__ == "__main__":
    
     # Enable anomaly detection to find the operation that produces nan
     torch.autograd.set_detect_anomaly(True)
+
+
     # validation and training loop
+    # Hyperparameters for updating Q_actions
+    learning_adjustment = 0.01 
     for epoch in range(num_epochs):
         # Set models to training mode
         feature_extractor.train()
@@ -232,12 +196,14 @@ if __name__ == "__main__":
         policy_network.train()
         efe_network.train()
 
+        # Initialize Q_actions with a uniform distribution at the start of each epoch
+        Q_actions_epoch = torch.full((2,), fill_value=0.5, device=device)
+
         for batch_idx, (image, _, mask) in enumerate(data_loader):
             image, mask = image.to(device), mask.to(device)
 
             # Forward pass through the feature extractor
             features = feature_extractor(image)
-            # features = feature_extractor(image, mask)
 
             # Update belief based on features
             pi_current = belief_update(features) # input shape:512 output shape: 2
@@ -245,14 +211,26 @@ if __name__ == "__main__":
             # Compute the target belief for binary classification
             target_belief = get_target_belief(mask)  # Assuming the presence of an anomaly is 1, absence is 0
 
+            # Calculate policy network output
+            q = policy_network(pi_current)
+
+            # Concatenate belief state and action for EFE input
+            input_to_efe = torch.cat([pi_current, q], dim=1)
+
             # Calculate the expected free energy
-            G_phi = efe_network(pi_current)  # Adjust the efe_network as necessary, input shape: 2, output: scalar
+            G_phi = efe_network(input_to_efe)  # Adjust the efe_network as necessary
             G = compute_actual_efe(pi_current, target_belief)
 
+            # Update Q_actions based on the actions chosen
+            action_chosen = torch.argmax(q, dim=1)
+            for action in range(2):  # Assuming 2 actions
+                Q_actions_epoch[action] += learning_adjustment * (action_chosen == action).float().mean()
+
+            # Normalize Q_actions to maintain a valid probability distribution
+            Q_actions_batch = torch.nn.functional.normalize(Q_actions_epoch.unsqueeze(0).repeat(image.size(0), 1), p=1, dim=1)
+
             # Calculate free energy for the policy network
-            q = policy_network(pi_current)
-            Q_actions = torch.full((q.size(0), 2), fill_value=0.5)  # Assuming a uniform prior over two actions (anomaly or no anomaly)
-            F = compute_free_energy(q, Q_actions)
+            F = compute_free_energy(q, Q_actions_batch)
 
             # Compute the total loss
             loss_policy = policy_loss(F).mean()
@@ -275,7 +253,11 @@ if __name__ == "__main__":
             # Print training loss for monitoring
             print(f"Epoch: {epoch+1}, Batch: {batch_idx+1}, Loss: {total_loss.item()}")
 
-        print("Training completed.")
+        # Reset Q_actions for the next epoch
+        Q_actions_epoch.fill_(0.5)
+
+        print("Training completed.")    
+
         # validation loop, complete the validation code here
         # During validation, set models to evaluation mode
         feature_extractor.eval()
@@ -286,6 +268,9 @@ if __name__ == "__main__":
         with torch.no_grad():  # Turn off gradients for validation
             validation_loss = 0.0
             num_validation_batches = len(val_loader)
+
+            # Initialize Q_actions with a uniform distribution for validation
+            Q_actions_val = torch.full((2,), fill_value=0.5, device=device)
 
             true_labels = []
             predicted_labels = []
@@ -309,16 +294,13 @@ if __name__ == "__main__":
                 true_labels.extend(true_class.cpu().numpy())
 
                 # Expected Free Energy calculation
-                G_phi = efe_network(pi_current)
+                q = policy_network(pi_current)
+                Q_actions_batch = torch.nn.functional.normalize(Q_actions_val.unsqueeze(0).repeat(image.size(0), 1), p=1, dim=1)
+                G_phi = efe_network(torch.cat([pi_current, q], dim=1))
                 G = compute_actual_efe(pi_current, target_belief)
 
-                # Consistent with training loop: policy network and free energy calculation
-                q = policy_network(pi_current)
-                Q_actions = torch.full((q.size(0), 2), fill_value=0.5)
-                F = compute_free_energy(q, Q_actions)
-
                 # Loss calculation
-                loss_policy = policy_loss(F).mean()
+                loss_policy = policy_loss(compute_free_energy(q, Q_actions_batch)).mean()
                 loss_efe = efe_loss(G_phi, G).mean()
                 total_loss = loss_policy + loss_efe
 
@@ -341,5 +323,6 @@ if __name__ == "__main__":
             print(f"Precision: {precision:.4f}")
             print(f"Recall: {recall:.4f}")
             print(f"F1-Score: {f1:.4f}")
+
 
 
