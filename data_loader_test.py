@@ -1,11 +1,13 @@
 import os
 import torch
-import torch.nn as nn
 from torchvision import transforms
 from torch.utils.data import Dataset, DataLoader
+from torchvision.models import resnet18, ResNet18_Weights
+import torch.nn as nn
 from PIL import Image
 import numpy as np
 import matplotlib.pyplot as plt
+
 
 class StreetHazardsDataset(Dataset):
     def __init__(self, image_dir, annotation_dir, transform=None):
@@ -55,7 +57,6 @@ class FeatureExtractor(nn.Module):
         image_features = image_features.view(image_features.size(0), -1)  # Flatten
         return image_features
 
-
 # Define transformations
 transform = transforms.Compose([
     transforms.Resize((224, 224)),  # Resize to 224x224
@@ -78,21 +79,17 @@ batch_size = 32
 data_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 
+
+
+
 if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
     # Create an instance of your dataset
     dataset = StreetHazardsDataset(image_dir, annotation_dir, transform=transform)
 
-    # Check a few examples
-    for i in range(9):
-        image, segmentation_mask, anomaly_mask = dataset[i]
-
-        print(f"Image {i}:")
-        print(f"  - Image shape: {image.shape}, type: {image.dtype}")
-        print(f"  - Segmentation mask shape: {segmentation_mask.shape}, unique values: {torch.unique(segmentation_mask)}")
-        print(f"  - Anomaly mask shape: {anomaly_mask.shape}, unique values: {torch.unique(anomaly_mask)}")
-
-        # Visualization
+    # Visualization function
+    def visualize_data(image, segmentation_mask, anomaly_mask):
         plt.figure(figsize=(12, 4))
         plt.subplot(1, 3, 1)
         plt.imshow(image.permute(1, 2, 0))
@@ -105,6 +102,15 @@ if __name__ == "__main__":
         plt.title('Anomaly Mask')
         plt.show()
 
+    # Check and visualize a few examples
+    for i in range(3):
+        image, segmentation_mask, anomaly_mask = dataset[i]
+        print(f"Image {i}:")
+        print(f"  - Image shape: {image.shape}, type: {image.dtype}")
+        print(f"  - Segmentation mask shape: {segmentation_mask.shape}, unique values: {torch.unique(segmentation_mask)}")
+        print(f"  - Anomaly mask shape: {anomaly_mask.shape}, unique values: {torch.unique(anomaly_mask)}")
+        visualize_data(image, segmentation_mask, anomaly_mask)
+
     # DataLoader check
     data_loader = DataLoader(dataset, batch_size=4, shuffle=True)
     images, segmentation_masks, anomaly_masks = next(iter(data_loader))
@@ -112,3 +118,12 @@ if __name__ == "__main__":
     print(f"Batch of images shape: {images.shape}")
     print(f"Batch of segmentation masks shape: {segmentation_masks.shape}")
     print(f"Batch of anomaly masks shape: {anomaly_masks.shape}")
+
+    # Feature extraction check
+    feature_extractor = FeatureExtractor().to(device)
+    feature_extractor.eval()
+    with torch.no_grad():
+        images = images.to(device)
+        features = feature_extractor(images)
+        print(f"Extracted features shape: {features.shape}")
+        print(f"Features statistics - Mean: {features.mean()}, Std: {features.std()}")

@@ -8,8 +8,18 @@ from torchvision import transforms
 # Add more imports as necessary, for example, for your dataset, models, etc.
 from data_loader import StreetHazardsDataset, transform
 from data_loader import val_loader # data_loader should be imported and taken out of the training script 
-from models import CNNEncoder, PolicyNetwork, BootstrappedEFENetwork
+from models import CNNEncoder, PolicyNetwork, BootstrappedEFENetwork, BeliefUpdateNetwork, FeatureExtractor
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+from torch.utils.tensorboard import SummaryWriter
+writer = SummaryWriter('runs/finalproj')
+
+import wandb
+wandb.login()
+
+# Initialize Weights & Biases
+wandb.init(project="finalproject", entity="ajsen")
+
+from torch.profiler import profile, record_function, ProfilerActivity
 
 
 import torchvision.models as models
@@ -31,17 +41,17 @@ class FeatureExtractor(nn.Module):
 
 
 
-class BeliefUpdateNetwork(nn.Module):
-    def __init__(self, input_dim, hidden_dim, output_dim):
-        super(BeliefUpdateNetwork, self).__init__()
-        self.fc1 = nn.Linear(input_dim, hidden_dim)
-        self.fc2 = nn.Linear(hidden_dim, output_dim)
-        self.softmax = nn.Softmax(dim=1)
+# class BeliefUpdateNetwork(nn.Module):
+#     def __init__(self, input_dim, hidden_dim, output_dim):
+#         super(BeliefUpdateNetwork, self).__init__()
+#         self.fc1 = nn.Linear(input_dim, hidden_dim)
+#         self.fc2 = nn.Linear(hidden_dim, output_dim)
+#         self.softmax = nn.Softmax(dim=1)
 
-    def forward(self, x):
-        x = torch.relu(self.fc1(x))
-        x = self.softmax(self.fc2(x))
-        return x
+#     def forward(self, x):
+#         x = torch.relu(self.fc1(x))
+#         x = self.softmax(self.fc2(x))
+#         return x
 
 
 def compute_entropy(pi):
@@ -198,60 +208,64 @@ if __name__ == "__main__":
 
         # Initialize Q_actions with a uniform distribution at the start of each epoch
         Q_actions_epoch = torch.full((2,), fill_value=0.5, device=device)
+        with torch.profiler.profile(use_cuda=True, profile_memory=True, record_shapes=True) as profiler:
+            for batch_idx, (image, _, mask) in enumerate(data_loader):
+                image, mask = image.to(device), mask.to(device)
 
-        for batch_idx, (image, _, mask) in enumerate(data_loader):
-            image, mask = image.to(device), mask.to(device)
+                # Forward pass through the feature extractor
+                features = feature_extractor(image)
 
-            # Forward pass through the feature extractor
-            features = feature_extractor(image)
+                # Update belief based on features
+                pi_current = belief_update(features) # input shape:512 output shape: 2
 
-            # Update belief based on features
-            pi_current = belief_update(features) # input shape:512 output shape: 2
+                # Compute the target belief for binary classification
+                target_belief = get_target_belief(mask)  # Assuming the presence of an anomaly is 1, absence is 0
 
-            # Compute the target belief for binary classification
-            target_belief = get_target_belief(mask)  # Assuming the presence of an anomaly is 1, absence is 0
+                # Calculate policy network output
+                q = policy_network(pi_current)
 
-            # Calculate policy network output
-            q = policy_network(pi_current)
+                # Concatenate belief state and action for EFE input
+                input_to_efe = torch.cat([pi_current, q], dim=1)
 
-            # Concatenate belief state and action for EFE input
-            input_to_efe = torch.cat([pi_current, q], dim=1)
+                # Calculate the expected free energy
+                G_phi = efe_network(input_to_efe)  # Adjust the efe_network as necessary
+                G = compute_actual_efe(pi_current, target_belief)
 
-            # Calculate the expected free energy
-            G_phi = efe_network(input_to_efe)  # Adjust the efe_network as necessary
-            G = compute_actual_efe(pi_current, target_belief)
+                # Update Q_actions based on the actions chosen
+                action_chosen = torch.argmax(q, dim=1)
+                for action in range(2):  # Assuming 2 actions
+                    Q_actions_epoch[action] += learning_adjustment * (action_chosen == action).float().mean()
 
-            # Update Q_actions based on the actions chosen
-            action_chosen = torch.argmax(q, dim=1)
-            for action in range(2):  # Assuming 2 actions
-                Q_actions_epoch[action] += learning_adjustment * (action_chosen == action).float().mean()
+                # Normalize Q_actions to maintain a valid probability distribution
+                Q_actions_batch = torch.nn.functional.normalize(Q_actions_epoch.unsqueeze(0).repeat(image.size(0), 1), p=1, dim=1)
 
-            # Normalize Q_actions to maintain a valid probability distribution
-            Q_actions_batch = torch.nn.functional.normalize(Q_actions_epoch.unsqueeze(0).repeat(image.size(0), 1), p=1, dim=1)
+                # Calculate free energy for the policy network
+                F = compute_free_energy(q, Q_actions_batch)
 
-            # Calculate free energy for the policy network
-            F = compute_free_energy(q, Q_actions_batch)
+                # Compute the total loss
+                loss_policy = policy_loss(F).mean()
+                loss_efe = efe_loss(G_phi, G).mean()
+                total_loss = loss_policy + loss_efe
 
-            # Compute the total loss
-            loss_policy = policy_loss(F).mean()
-            loss_efe = efe_loss(G_phi, G).mean()
-            total_loss = loss_policy + loss_efe
+                # Backpropagation
+                optimizer_policy.zero_grad()
+                optimizer_efe.zero_grad()
+                total_loss.backward()
 
-            # Backpropagation
-            optimizer_policy.zero_grad()
-            optimizer_efe.zero_grad()
-            total_loss.backward()
+                # Gradient clipping
+                torch.nn.utils.clip_grad_norm_(policy_network.parameters(), max_norm=1.0)
+                torch.nn.utils.clip_grad_norm_(efe_network.parameters(), max_norm=1.0)
+        
+                # Optimizer step
+                optimizer_policy.step()
+                optimizer_efe.step()
 
-            # Gradient clipping
-            torch.nn.utils.clip_grad_norm_(policy_network.parameters(), max_norm=1.0)
-            torch.nn.utils.clip_grad_norm_(efe_network.parameters(), max_norm=1.0)
-
-            # Optimizer step
-            optimizer_policy.step()
-            optimizer_efe.step()
-
-            # Print training loss for monitoring
-            print(f"Epoch: {epoch+1}, Batch: {batch_idx+1}, Loss: {total_loss.item()}")
+                # Print training loss for monitoring
+                # writer.add_scalar('Loss/train', total_loss, epoch * len(data_loader) + batch_idx)
+                # Log training loss
+                writer.add_scalar('Loss/train', total_loss.item(), epoch * len(data_loader) + batch_idx)
+                wandb.log({"Loss/train": total_loss.item(), "epoch": epoch})
+                print(f"Epoch: {epoch+1}, Batch: {batch_idx+1}, Loss: {total_loss.item()}")
 
         # Reset Q_actions for the next epoch
         Q_actions_epoch.fill_(0.5)
@@ -307,6 +321,7 @@ if __name__ == "__main__":
                 validation_loss += total_loss.item()
 
                 # Optionally, print validation loss
+                writer.add_scalar('Loss/train', total_loss, epoch * len(val_loader) + batch_idx)
                 print(f"Validation - Epoch: {epoch+1}, Batch: {batch_idx+1}, Loss: {total_loss.item()}")
 
             average_validation_loss = validation_loss / num_validation_batches
@@ -326,3 +341,8 @@ if __name__ == "__main__":
 
 
 
+# Close the TensorBoard writer
+writer.close()
+
+# Finish the wandb run
+wandb.finish()

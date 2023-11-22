@@ -1,35 +1,101 @@
 import torch
 import torch.nn as nn
-# contains the neural architectures for the DAI algorithm and SAC
+# contains the neural architectures for the DAI algorithm
+
+import torchvision.models as models
+from torchvision.models import resnet18, ResNet18_Weights
+
+
+class FeatureExtractor(nn.Module):
+    def __init__(self):
+        super(FeatureExtractor, self).__init__()
+        self.image_feature_extractor = resnet18(weights=ResNet18_Weights.IMAGENET1K_V1)
+        self.image_feature_extractor = nn.Sequential(*list(self.image_feature_extractor.children())[:-1])  # Remove the last FC layer
+
+    def forward(self, image):
+        image_features = self.image_feature_extractor(image)
+        image_features = image_features.view(image_features.size(0), -1)  # Flatten
+        return image_features
+
+
+# class PolicyNetwork(nn.Module):
+#     """
+#     Neural network to represent the stochastic selection policy.
+#     """
+#     def __init__(self, input_dim, hidden_dim, output_dim):
+#         super(PolicyNetwork, self).__init__()
+#         self.fc1 = nn.Linear(input_dim, hidden_dim)
+#         self.fc2 = nn.Linear(hidden_dim, output_dim)
+#         self.softmax = nn.Softmax(dim=1)
+    
+#     def forward(self, x):
+#         x = torch.relu(self.fc1(x))
+#         x = self.softmax(self.fc2(x))
+#         return x
+
 
 class PolicyNetwork(nn.Module):
-    """
-    Neural network to represent the stochastic selection policy.
-    """
     def __init__(self, input_dim, hidden_dim, output_dim):
         super(PolicyNetwork, self).__init__()
         self.fc1 = nn.Linear(input_dim, hidden_dim)
-        self.fc2 = nn.Linear(hidden_dim, output_dim)
+        self.bn1 = nn.BatchNorm1d(hidden_dim)
+        self.fc2 = nn.Linear(hidden_dim, hidden_dim)
+        self.bn2 = nn.BatchNorm1d(hidden_dim)
+        self.fc3 = nn.Linear(hidden_dim, output_dim)
         self.softmax = nn.Softmax(dim=1)
-    
+
     def forward(self, x):
-        x = torch.relu(self.fc1(x))
-        x = self.softmax(self.fc2(x))
+        x = torch.relu(self.bn1(self.fc1(x)))
+        x = torch.relu(self.bn2(self.fc2(x)))
+        x = self.softmax(self.fc3(x))
         return x
 
+# class BootstrappedEFENetwork(nn.Module):
+#     """
+#     Neural network to represent the bootstrapped Expected Free Energy (EFE).
+#     """
+#     def __init__(self, input_dim, hidden_dim):
+#         super(BootstrappedEFENetwork, self).__init__()
+#         self.fc1 = nn.Linear(input_dim, hidden_dim)
+#         self.fc2 = nn.Linear(hidden_dim, 1) # Outputs a single scalar representing EFE
+    
+#     def forward(self, x):
+#         x = torch.relu(self.fc1(x))
+#         x = self.fc2(x)
+#         return x
+
 class BootstrappedEFENetwork(nn.Module):
-    """
-    Neural network to represent the bootstrapped Expected Free Energy (EFE).
-    """
     def __init__(self, input_dim, hidden_dim):
         super(BootstrappedEFENetwork, self).__init__()
         self.fc1 = nn.Linear(input_dim, hidden_dim)
-        self.fc2 = nn.Linear(hidden_dim, 1) # Outputs a single scalar representing EFE
-    
+        self.bn1 = nn.BatchNorm1d(hidden_dim)
+        self.fc2 = nn.Linear(hidden_dim, hidden_dim)
+        self.bn2 = nn.BatchNorm1d(hidden_dim)
+        self.fc3 = nn.Linear(hidden_dim, 1)
+
     def forward(self, x):
-        x = torch.relu(self.fc1(x))
-        x = self.fc2(x)
+        x = torch.relu(self.bn1(self.fc1(x)))
+        x = torch.relu(self.bn2(self.fc2(x)))
+        x = self.fc3(x)
         return x
+
+class BeliefUpdateNetwork(nn.Module):
+    def __init__(self, input_dim, hidden_dim, output_dim):
+        super(BeliefUpdateNetwork, self).__init__()
+        self.fc1 = nn.Linear(input_dim, hidden_dim)
+        self.bn1 = nn.BatchNorm1d(hidden_dim)
+        self.fc2 = nn.Linear(hidden_dim, hidden_dim)
+        self.bn2 = nn.BatchNorm1d(hidden_dim)
+        self.fc3 = nn.Linear(hidden_dim, output_dim)
+        self.softmax = nn.Softmax(dim=1)
+
+    def forward(self, x):
+        x = torch.relu(self.bn1(self.fc1(x)))
+        x = torch.relu(self.bn2(self.fc2(x)))
+        x = self.softmax(self.fc3(x))
+        return x
+
+
 
 class CNNEncoder(nn.Module):
     def __init__(self):
