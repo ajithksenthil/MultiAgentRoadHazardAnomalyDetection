@@ -1,26 +1,49 @@
+# replay_buffer.py
 import random
 import numpy as np
 
 class ReplayBuffer:
-    def __init__(self, capacity):
+    def __init__(self, capacity, num_agents):
         self.capacity = capacity
-        self.buffer = []
-        self.position = 0
+        self.num_agents = num_agents
+        self.buffers = [[] for _ in range(num_agents)]
+        self.positions = [0 for _ in range(num_agents)]
 
-    def push(self, state, action, reward, next_state, done):
-        if len(self.buffer) < self.capacity:
-            self.buffer.append(None)
-        self.buffer[self.position] = (state, action, reward, next_state, done)
-        self.position = (self.position + 1) % self.capacity
+    def push(self, states, actions, rewards, next_states, dones):
+        # states, actions, rewards, next_states, and dones are expected to be lists of lists
+        # where each inner list corresponds to an agent's experiences
+        for i in range(self.num_agents):
+            if len(self.buffers[i]) < self.capacity:
+                self.buffers[i].append(None)
+            self.buffers[i][self.positions[i]] = (states[i], actions[i], rewards[i], next_states[i], dones[i])
+            self.positions[i] = (self.positions[i] + 1) % self.capacity
 
     def sample(self, batch_size):
-        batch = random.sample(self.buffer, batch_size)
-        state, action, reward, next_state, done = map(np.stack, zip(*batch))
-        return state, action, reward, next_state, done
+        # Randomly sample a batch of transitions for each agent from their respective buffers
+        batches = []
+        for i in range(self.num_agents):
+            batch = random.sample(self.buffers[i], batch_size)
+            state, action, reward, next_state, done = map(np.stack, zip(*batch))
+            batches.append((state, action, reward, next_state, done))
+        return batches
 
     def __len__(self):
-        return len(self.buffer)
+        return min(len(buffer) for buffer in self.buffers)
 
+"""
+Enhancements:
+- Multi-Agent Compatibility: The buffer now maintains separate lists of experiences for each agent.
+- Push Method: It now accepts lists of experiences for each agent and updates their respective buffers.
+- Sample Method: It samples a batch of transitions for each agent, enabling parallel updates of multiple agents.
+- Length Method: Returns the length of the shortest buffer to ensure consistent sampling.
+
+Usage Considerations:
+- When storing transitions, provide lists of states, actions, rewards, next_states, and dones for all agents.
+- During training, sample from the buffer and update each agent's parameters using their respective batch of experiences.
+- Ensure that the environment's step function returns experiences in a format compatible with this buffer structure.
+
+This replay buffer is now ready to be integrated with the rest of your multi-agent SAC setup in CARLA.
+"""
 
 """
 Explanation:

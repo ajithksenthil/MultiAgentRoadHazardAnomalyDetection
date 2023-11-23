@@ -1,3 +1,4 @@
+# mSAC_models.py
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -15,7 +16,7 @@ class Actor(nn.Module):
         x = F.relu(self.fc2(x))
         mu = self.mu_head(x)
         log_std = self.log_std_head(x)
-        log_std = torch.clamp(log_std, min=-20, max=2)
+        log_std = torch.clamp(log_std, min=-20, max=2)  # Prevents numerical instability
         return mu, log_std
 
     def sample(self, state):
@@ -23,7 +24,7 @@ class Actor(nn.Module):
         std = log_std.exp()
         dist = torch.distributions.Normal(mu, std)
         z = dist.rsample()
-        action = torch.tanh(z)
+        action = torch.tanh(z)  # Ensures action bounds
         log_prob = dist.log_prob(z) - torch.log(1 - action.pow(2) + 1e-6)
         return action, log_prob.sum(-1, keepdim=True)
 
@@ -41,7 +42,23 @@ class Critic(nn.Module):
         q_value = self.q_head(x)
         return q_value
 
-# Add any additional necessary classes or functions
+# Add any other necessary classes or functions
+
+'''
+Modifications for CARLA Integration:
+- Action Space: The action space for driving tasks can be complex (e.g., steering, acceleration, braking). Ensure that the action_dim is set appropriately.
+- State Space: The state input should incorporate relevant features like vehicle dynamics, sensor readings, and environmental cues.
+- Network Complexity: Depending on the complexity of the driving scenario, you may need to adjust the hidden_dim or add more layers to the networks.
+- Non-linearity: ReLU is used for simplicity. You may experiment with other activation functions based on the specific requirements of your tasks.
+- Stability: The clamping of log_std is crucial for preventing numerical issues during training.
+- Bounded Actions: The tanh function ensures that the actions are bounded, which is necessary for controlling vehicle movements.
+
+Considerations:
+- Ensure the Actor model generates actions suitable for the driving tasks in CARLA (e.g., steering angles, throttle values).
+- The Critic model should effectively estimate the Q-values given the states and actions in the driving context.
+- You might need to incorporate additional sensory inputs or state information relevant to your specific CARLA simulation setup.
+'''
+
 
 '''
 Actor Network
