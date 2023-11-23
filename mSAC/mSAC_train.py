@@ -1,34 +1,57 @@
 # mSAC_train.py
-from mSAC_models import Actor, Critic
+import os
+import torch
+from mSAC_models import Actor, Critic, MixingNetwork
 from mSAC_agent import Agent
 from replay_buffer import ReplayBuffer
 from environment import CarlaEnv
 
 # Initialize Carla environment
-env = CarlaEnv() 
+env = CarlaEnv()  # Ensure CarlaEnv is configured for multiple agents
 
-# Define the number of agents
-num_agents = 2  # Adjust the number of agents based on your scenario
+# Define the number of agents and the mixing network
+num_agents = 2  # Adjust based on your scenario
+mixing_network = MixingNetwork(num_agents=num_agents, state_dim=env.state_size)
 
-# Initialize agents
+# Initialize agents and their optimizers
 agents = [Agent(state_size=env.state_size, action_size=env.action_size) for _ in range(num_agents)]
 
 # Initialize replay buffer
-buffer_size = 1000000  # Example buffer size, can be adjusted
-replay_buffer = ReplayBuffer(buffer_size, num_agents)
+buffer_size = 1000000  # Adjust as needed
+replay_buffer = ReplayBuffer(buffer_size, num_agents)  # Ensure ReplayBuffer handles experiences for multiple agents
 
 # Training hyperparameters
 max_episodes = 10000
 max_timesteps = 1000
 batch_size = 128
 
+# Directory for saving models
+model_dir = "./models"
+os.makedirs(model_dir, exist_ok=True)
+
+def save_model(agent, episode, agent_idx):
+    torch.save(agent.actor.state_dict(), os.path.join(model_dir, f"actor_agent_{agent_idx}_episode_{episode}.pth"))
+    torch.save(agent.critic.state_dict(), os.path.join(model_dir, f"critic_agent_{agent_idx}_episode_{episode}.pth"))
+
+def evaluate_agent(agent, env, num_runs=10):
+    total_reward = 0.0
+    for _ in range(num_runs):
+        state = env.reset()
+        done = False
+        while not done:
+            action = agent.select_action(state)
+            next_state, reward, done, _ = env.step(action)
+            total_reward += reward
+    avg_reward = total_reward / num_runs
+    return avg_reward
+
 for episode in range(max_episodes):
-    states = env.reset()  # Expecting the environment to return a list of states for each agent
+    states = env.reset()  # Reset environment and get initial states for all agents
     total_rewards = [0 for _ in range(num_agents)]
 
     for t in range(max_timesteps):
         actions = [agent.select_action(states[i]) for i, agent in enumerate(agents)]
-        next_states, rewards, done, _ = env.step(actions)
+        next_states, rewards, done, _ = env.step(actions)  # Apply actions and get results
 
         # Store transitions in replay buffer
         replay_buffer.push(states, actions, rewards, next_states, done)
@@ -36,8 +59,8 @@ for episode in range(max_episodes):
         # Update parameters of each agent if replay buffer is sufficiently large
         if len(replay_buffer) > batch_size:
             for i, agent in enumerate(agents):
-                batches = replay_buffer.sample(batch_size)
-                agent.update_parameters(batches[i])
+                samples = replay_buffer.sample(batch_size, i)  # Ensure replay_buffer.sample handles multi-agent setup
+                agent.update_parameters(samples, mixing_network)
 
         states = next_states
         for i in range(num_agents):
@@ -49,25 +72,29 @@ for episode in range(max_episodes):
     avg_reward = sum(total_rewards) / num_agents
     print(f"Episode {episode} Average Reward: {avg_reward}")
 
-    # Optionally save models and evaluate performance periodically
+    # Performance evaluation and model saving
     if episode % 100 == 0:
-        # TODO: Implement model saving and performance evaluation logic
+        for i, agent in enumerate(agents):
+            avg_reward = evaluate_agent(agent, env)
+            print(f"Agent {i}, Episode {episode}, Evaluation Average Reward: {avg_reward}")
+            save_model(agent, episode, i)
 
-# Optionally, save final models
-# TODO: Implement final model saving logic
+# Save final models
+for i, agent in enumerate(agents):
+    save_model(agent, max_episodes, i)
+
 
 # '''
 # Modifications:
-# - Support for Multiple Agents: The script now handles multiple agents. It expects the environment to return lists of states, actions, and rewards corresponding to each agent.
-# - Replay Buffer Interaction: Adjusted to work with the modified multi-agent replay buffer. Each agent's experiences are stored and sampled separately.
-# - Agent Updates: Each agent is updated with its own batch of experiences.
+# - Multi-agent support in the environment and replay buffer.
+# - Each agent updates using its own set of experiences.
+# - Performance evaluation and model saving logic to be implemented.
 
-# Additional Considerations:
-# - Environment Setup: Ensure that your `CarlaEnv` class is capable of handling multiple agents and returning their respective states and rewards.
-# - Action and State Spaces: The dimensions of action and state spaces (`env.action_size` and `env.state_size`) should align with what your environment and agents expect.
-# - Model Saving and Performance Evaluation: Implement logic to periodically save models and evaluate their performance, which is crucial for long training runs and analysis.
+# Additional Notes:
+# - Ensure the `CarlaEnv` class is capable of simulating multiple agents and returning their states and rewards.
+# - Implement model saving and performance evaluation to track agent learning progress.
+# - Consider any specific configurations or constraints of the CARLA simulator and Traffic Manager.
 # '''
-
 
 # '''
 # Key Components:

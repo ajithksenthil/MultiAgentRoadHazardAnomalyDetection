@@ -42,7 +42,55 @@ class Critic(nn.Module):
         q_value = self.q_head(x)
         return q_value
 
-# Add any other necessary classes or functions
+
+class HyperNetwork(nn.Module):
+    def __init__(self, state_dim, num_agents):
+        super(HyperNetwork, self).__init__()
+        self.state_dim = state_dim
+        self.num_agents = num_agents
+        self.hyper_w1 = nn.Sequential(
+            nn.Linear(self.state_dim, 128),
+            nn.ReLU(),
+            nn.Linear(128, self.num_agents)
+        )
+        self.hyper_w2 = nn.Sequential(
+            nn.Linear(self.state_dim, 128),
+            nn.ReLU(),
+            nn.Linear(128, self.num_agents)
+        )
+
+    def forward(self, global_state):
+        w1 = torch.abs(self.hyper_w1(global_state))
+        w2 = torch.abs(self.hyper_w2(global_state))
+        return w1, w2
+
+class MixingNetwork(nn.Module):
+    def __init__(self, num_agents, state_dim):
+        super(MixingNetwork, self).__init__()
+        self.num_agents = num_agents
+        self.state_dim = state_dim
+        self.hyper_net = HyperNetwork(self.state_dim, self.num_agents)
+
+    def forward(self, states, local_qs):
+        w1, w2 = self.hyper_net(states)
+        # Apply the mixing network weights
+        mixed_qs = torch.einsum('bq,bq->b', w1, local_qs) + w2.sum(dim=1, keepdim=True)
+        return mixed_qs
+
+# Define any additional necessary classes or functions
+
+'''
+Modifications:
+- HyperNetwork: This class generates the weights for the mixing network using the global state.
+- MixingNetwork: This class takes the outputs of individual agent's Q-networks and combines them into a total Q-value (Qtot).
+- CARLA Integration: The mixing network must be able to handle the state information provided by the CARLA environment, which will be more complex than simple numerical states.
+
+Considerations:
+- Ensure the MixingNetwork is compatible with the global state and individual Q-values provided by the CARLA simulation.
+- The HyperNetwork's output must be of the appropriate shape and have the correct constraints (e.g., non-negativity for weights).
+- You might need to tune the size and structure of the HyperNetwork and MixingNetwork to fit the scale and complexity of your multi-agent system in CARLA.
+- Test and validate the network outputs to ensure they are being combined correctly and that the resultant Qtot is reasonable and useful for training.
+'''
 
 '''
 Modifications for CARLA Integration:
