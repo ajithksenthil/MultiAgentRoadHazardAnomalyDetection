@@ -7,41 +7,44 @@ class Actor(nn.Module):
     def __init__(self, state_dim, action_dim, hidden_dim=256):
         super(Actor, self).__init__()
         self.fc1 = nn.Linear(state_dim, hidden_dim)
+        self.gru = nn.GRUCell(hidden_dim, hidden_dim)  # GRU layer for temporal dependencies
         self.fc2 = nn.Linear(hidden_dim, hidden_dim)
         self.mu_head = nn.Linear(hidden_dim, action_dim)
         self.log_std_head = nn.Linear(hidden_dim, action_dim)
 
-    def forward(self, state):
+    def forward(self, state, hx):
         x = F.relu(self.fc1(state))
-        x = F.relu(self.fc2(x))
+        hx = self.gru(x, hx)  # Update hidden state
+        x = F.relu(self.fc2(hx))
         mu = self.mu_head(x)
         log_std = self.log_std_head(x)
         log_std = torch.clamp(log_std, min=-20, max=2)  # Prevents numerical instability
-        return mu, log_std
+        return mu, log_std, hx
 
-    def sample(self, state):
-        mu, log_std = self.forward(state)
+    def sample(self, state, hx):
+        mu, log_std, hx = self.forward(state, hx)
         std = log_std.exp()
         dist = torch.distributions.Normal(mu, std)
         z = dist.rsample()
         action = torch.tanh(z)  # Ensures action bounds
         log_prob = dist.log_prob(z) - torch.log(1 - action.pow(2) + 1e-6)
-        return action, log_prob.sum(-1, keepdim=True)
+        return action, log_prob.sum(-1, keepdim=True), hx
 
 class Critic(nn.Module):
     def __init__(self, state_dim, action_dim, hidden_dim=256):
         super(Critic, self).__init__()
         self.fc1 = nn.Linear(state_dim + action_dim, hidden_dim)
+        self.gru = nn.GRUCell(hidden_dim, hidden_dim)  # GRU layer for temporal dependencies
         self.fc2 = nn.Linear(hidden_dim, hidden_dim)
         self.q_head = nn.Linear(hidden_dim, 1)
 
-    def forward(self, state, action):
+    def forward(self, state, action, hx):
         x = torch.cat([state, action], dim=1)
         x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
+        hx = self.gru(x, hx)  # Update hidden state
+        x = F.relu(self.fc2(hx))
         q_value = self.q_head(x)
-        return q_value
-
+        return q_value, hx
 
 class HyperNetwork(nn.Module):
     def __init__(self, state_dim, num_agents):

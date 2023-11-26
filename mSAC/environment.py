@@ -1,85 +1,302 @@
 import carla
 import numpy as np
 import random
+from traffic_manager_api import TrafficManagerAPI
+import sys
+import os
+
+# Append the parent directory to sys.path
+parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(parent_dir)
+
+from gcp_baseline_train import ResNetBinaryClassifier
+import torch
+import torchvision.transforms as transforms
+from PIL import Image
+
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class CarlaEnv:
-    def __init__(self, host, port):
-        # Initialize CARLA server and world
-        self.client = carla.Client(host, port)
-        self.client.set_timeout(10.0)
-        self.world = self.client.get_world()
+    def __init__(self, client, traffic_manager):
+        # Initialize CARLA world using provided client and traffic manager
+        self.world = client.get_world()
 
-        # Configure Traffic Manager
-        self.traffic_manager = self.client.get_trafficmanager(8000)
-        self.traffic_manager.set_global_distance_to_leading_vehicle(2.0)
-        # Additional Traffic Manager configurations can be added here
+        # Configure Traffic Manager using provided traffic manager
+        self.traffic_manager_api = TrafficManagerAPI(traffic_manager)
 
         # Vehicle and sensor setup
-        self.ego_vehicle = None  # Ego vehicle controlled by SAC
-        self.sensors = []  # List of sensors attached to ego vehicle
         self.setup_vehicle_and_sensors()
 
         # State and action dimensions
         self.state_size = 10  # Define the size of the state
         self.action_size = 5  # Define the size of the action
+        
+        # Initialize the hazard detection model
+        self.hazard_detection_model = ResNetBinaryClassifier().to(device)
+        model_path = '../trained_model.pth'  # Path to the model in the parent directory
+        self.hazard_detection_model.load_state_dict(torch.load(model_path))
+        self.hazard_detection_model.eval()
+
+        # Define the transform for preprocessing the input image
+        self.transform = transforms.Compose([
+            transforms.Resize((224, 224)),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        ])
+
+
 
     def setup_vehicle_and_sensors(self):
-        # Code to spawn ego vehicle and attach sensors
+        # Vehicle setup
         blueprint_library = self.world.get_blueprint_library()
         vehicle_bp = blueprint_library.filter('model3')[0]
         spawn_point = random.choice(self.world.get_map().get_spawn_points())
         self.ego_vehicle = self.world.spawn_actor(vehicle_bp, spawn_point)
 
-        # Set vehicle to autopilot
-        self.ego_vehicle.set_autopilot(True, self.traffic_manager.get_port())
+        # Sensor setup
+        camera_bp = blueprint_library.find('sensor.camera.rgb')
+        # Configure camera parameters if necessary
+        camera_transform = carla.Transform(carla.Location(x=1.5, z=2.4))  # Example position
+        self.camera_sensor = self.world.spawn_actor(camera_bp, camera_transform, attach_to=self.ego_vehicle)
+        # Camera sensor setup with listener
+        self.camera_sensor.listen(lambda image_data: self.camera_callback(image_data))
 
-        # Sensor setup code here
-        # Example: attaching a camera or lidar sensor
+        # LIDAR sensor setup with listener
+        self.lidar_sensor.listen(lambda lidar_data: self.lidar_callback(lidar_data))
+        lidar_bp = blueprint_library.find('sensor.lidar.ray_cast')
+        # Configure LIDAR parameters if necessary
+        lidar_transform = carla.Transform(carla.Location(x=0, z=2.5))  # Example position
+        self.lidar_sensor = self.world.spawn_actor(lidar_bp, lidar_transform, attach_to=self.ego_vehicle)
+
+    def camera_callback(self, image_data):
+        # Process the image data
+        array = np.frombuffer(image_data.raw_data, dtype=np.dtype("uint8"))
+        array = np.reshape(array, (image_data.height, image_data.width, 4))
+        self.camera_data = array[:, :, :3]  # Store RGB data
+
+    
+    def retrieve_camera_data(self):
+        # Return the latest processed camera data
+        return self.camera_data if self.camera_data is not None else np.zeros((800, 600, 3))
+
+    def retrieve_lidar_data(self):
+        # Return the latest processed LIDAR data
+        return self.lidar_data if self.lidar_data is not None else np.zeros((...))  # Default size/format
+
 
     def reset(self):
-        # Reset the environment to start a new episode
-        # This should reset the position of the vehicle and clear any anomalies
-        # Placeholder implementation
-        return np.random.rand(self.state_size)
+        # Reset logic...
+        return self.get_state()
 
     def step(self, action):
-        # Apply the action to the CARLA environment
-        # Implement the logic to convert action to CARLA vehicle control
-        # Example: action could include [steer, throttle, brake] values
+        # Convert action to CARLA vehicle control
+        control = carla.VehicleControl(throttle=action[0], steer=action[1], brake=action[2])
+        self.ego_vehicle.apply_control(control)
 
-        # Simulate anomaly detection and respond
-        anomaly_detected = self.detect_anomaly()
-        if anomaly_detected:
-            # Modify the reward or state based on anomaly
-            pass
+        # Process sensor data and detect anomalies
+        sensor_data = self.get_sensor_data()  # Retrieve data from sensors
+        anomaly_detected = self.hazard_detector.detect_hazards(sensor_data)
+        reward = self.calculate_reward(anomaly_detected)
 
-        # Placeholder for state, reward, done, and info
-        next_state = np.random.rand(self.state_size)
-        reward = random.random()
-        done = False
+        next_state = self.get_state()
+        done = self.check_done()
         info = {"anomaly": anomaly_detected}
-
+        
         return next_state, reward, done, info
 
-    def detect_anomaly(self):
-        # Implement anomaly detection logic
-        # Example: Random chance of anomaly or based on vehicle's location
-        return random.choice([True, False])
-
+    
     def process_sensor_data(self):
-        # Process sensor data to update the state
-        # This could involve processing camera images, lidar data, etc.
-        pass
+        # Processing camera data
+        camera_data = self.retrieve_camera_data()
+        hazards_detected = self.detect_hazards_in_image(camera_data)
+        self.hazard_flag = hazards_detected
 
-# # Test case for CarlaEnv
-# if __name__ == "__main__":
-#     # Test code for environment interaction
-#     env = CarlaEnv('34.152.7.85', 2000)
-#     state = env.reset()
-#     for _ in range(10):
-#         action = np.random.rand(env.action_size)
-#         next_state, reward, done, info = env.step(action)
-#         print(f"State: {state}, Action: {action}, Reward: {reward}, Done: {done}, Info: {info}")
-#         if done:
-#             break
-#         state = next_state
+        # Processing LIDAR data
+        lidar_data = self.retrieve_lidar_data()
+        processed_lidar_data = self.process_lidar_data(lidar_data)
+        self.lidar_info = processed_lidar_data
+
+        # Combining data from all sensors for a complete state representation
+        self.current_sensor_state = self.combine_sensor_data(camera_data, processed_lidar_data)
+
+
+    def get_sensor_data(self):
+        # Initialize an empty dictionary to hold sensor data
+        sensor_data = {}
+
+        # Retrieve data from each sensor and process it
+        sensor_data["camera"] = self.process_camera_data(self.camera_sensor.retrieve_data())
+        sensor_data["lidar"] = self.process_lidar_data(self.lidar_sensor.retrieve_data())
+        # Include other sensors as necessary
+
+        # Return the processed sensor data
+        return sensor_data
+
+    def retrieve_camera_data(self):
+        # Retrieve the latest image from the camera sensor
+        image = self.camera_sensor.get_image()
+        # Convert the CARLA image to a format suitable for processing
+        # For example, converting to a numpy array
+        image_array = np.frombuffer(image.raw_data, dtype=np.dtype("uint8"))
+        image_array = np.reshape(image_array, (image.height, image.width, 4))  # Assuming RGBA format
+        return image_array[:, :, :3]  # Return RGB part
+
+
+    def detect_hazards_in_image(self, image):
+        # Convert the raw image data to a PIL image
+        pil_image = Image.fromarray(image).convert('RGB')
+
+        # Apply the transformations
+        input_tensor = self.transform(pil_image).unsqueeze(0).to(device)
+
+        # Predict with the model
+        with torch.no_grad():
+            output = self.hazard_detection_model(input_tensor).squeeze()
+            prediction = torch.sigmoid(output).item()
+
+        # Determine if a hazard is detected based on the prediction threshold
+        hazard_detected = prediction > 0.5  # adjust the threshold as needed
+        return hazard_detected
+
+    
+    # Helper methods for processing each type of sensor data
+    def process_camera_data(self, camera_data):
+        # Process camera data (e.g., image normalization)
+        processed_camera_data = camera_data
+        return processed_camera_data
+
+    def process_lidar_data(self, lidar_data):
+        # Process LIDAR data into a simplified 2D array representation
+
+        # # Define the dimensions of the 2D array (example values)
+        # width, height = 100, 100  # Adjust based on your needs
+
+        # # Initialize the 2D array with high values (indicating 'no object detected')
+        # processed_data = np.full((height, width), np.inf)
+
+        # # Example processing: populate the array with distances
+        # for point in lidar_data:
+        #     # Convert the point's location to array indices (simplified example)
+        #     x_index = int((point.location.x / MAX_X) * width)
+        #     y_index = int((point.location.y / MAX_Y) * height)
+
+        #     # Ensure indices are within bounds
+        #     x_index = min(max(x_index, 0), width - 1)
+        #     y_index = min(max(y_index, 0), height - 1)
+
+        #     # Update the distance in the array if this point is closer
+        #     distance = np.sqrt(point.location.x**2 + point.location.y**2)
+        #     processed_data[y_index, x_index] = min(processed_data[y_index, x_index], distance)
+        processed_data = lidar_data
+        return processed_data
+
+
+    def retrieve_lidar_data(self):
+        # Retrieve LIDAR data
+        lidar_data = self.lidar_sensor.get_data()
+        # Process the LIDAR data as needed for your application
+        # For example, converting to a point cloud or a 2D representation
+        processed_lidar_data = self.process_lidar_data(lidar_data)  # You need to define this function
+        return processed_lidar_data
+
+
+    def calculate_reward(self, anomaly_detected):
+        # Calculate reward based on the presence of anomalies and other factors
+        reward = 0.0
+        if anomaly_detected:
+            reward -= 50  # Penalize for hazard proximity
+        # Additional reward calculations
+        return reward
+
+    def combine_sensor_data(self, camera_data, lidar_data):
+        # Combine data from camera and LIDAR
+        # This could mean fusing the data into a single representation
+        combined_sensor_data = camera_data + lidar_data
+        return combined_sensor_data
+
+
+    def retrieve_sensor_data(self):
+        # Placeholder for sensor data retrieval and processing
+        # Example: Get camera and lidar data and convert to numerical features
+        camera_data = self.process_camera_data(self.camera_sensor.retrieve_data())
+        lidar_data = self.process_lidar_data(self.lidar_sensor.retrieve_data())
+
+        # Combine and flatten data into a single numpy array
+        sensor_data = np.concatenate([camera_data, lidar_data])
+        return sensor_data
+
+    def get_vehicle_telemetry(self):
+        # Get vehicle telemetry data
+        velocity = self.ego_vehicle.get_velocity()
+        acceleration = self.ego_vehicle.get_acceleration()
+        wheel_angle = self.ego_vehicle.get_control().steer
+
+        # Convert to numerical values
+        speed = np.sqrt(velocity.x**2 + velocity.y**2 + velocity.z**2)
+        acc = np.sqrt(acceleration.x**2 + acceleration.y**2 + acceleration.z**2)
+
+        # Combine into a single array
+        telemetry_data = np.array([speed, acc, wheel_angle])
+        return telemetry_data
+
+    def get_environmental_conditions(self):
+        # Placeholder for environmental conditions
+        # Example: Weather conditions, time of day, etc.
+        weather = self.world.get_weather()
+        time_of_day = self.world.get_snapshot().timestamp.elapsed_seconds
+
+        # Convert to numerical values (this is a simplified example)
+        weather_condition = np.array([weather.cloudiness, weather.precipitation, weather.wind_intensity])
+        time_data = np.array([time_of_day])
+
+        # Combine into a single array
+        environmental_data = np.concatenate([weather_condition, time_data])
+        return environmental_data
+    
+    def get_state(self):
+        # Retrieve various components of the state
+        sensor_data = self.retrieve_sensor_data()
+        vehicle_telemetry = self.get_vehicle_telemetry()
+        environmental_conditions = self.get_environmental_conditions()
+        hazard_detection = self.anomaly_flag
+
+        # Convert these components into a numerical sequence
+        # This is a placeholder implementation; you should replace it with your actual state representation
+        state = np.concatenate([sensor_data, vehicle_telemetry, environmental_conditions, [hazard_detection]])
+        return state
+
+    def check_done(self):
+        if self.reached_destination() or self.encountered_major_hazard() or self.exceeded_time_limit():
+            return True
+        return False
+    
+    def reached_destination(self):
+        # Placeholder logic for checking if the destination is reached
+        # For example, checking the vehicle's position against a target location
+        return False  # Replace with actual logic
+
+    def exceeded_time_limit(self):
+        # Check if the time limit for the episode is exceeded
+        # You need to define and update a variable that tracks the elapsed time
+        return False  # Replace with actual logic
+
+
+    def encountered_major_hazard(self):
+        # Logic to determine if a major hazard is encountered
+        # For example, checking for collisions or proximity to hazards
+        return False  # Replace with actual logic
+
+    def cleanup(self):
+        # Destroy the vehicle and sensors
+        if self.ego_vehicle:
+            self.ego_vehicle.destroy()
+        if self.camera_sensor:
+            self.camera_sensor.stop()  # Stop listening
+            self.camera_sensor.destroy()
+        if self.lidar_sensor:
+            self.lidar_sensor.stop()  # Stop listening
+            self.lidar_sensor.destroy()
+
+# Add additional methods as needed for retrieving data and conditions
+
