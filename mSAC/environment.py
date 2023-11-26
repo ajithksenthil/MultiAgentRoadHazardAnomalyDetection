@@ -85,6 +85,61 @@ class CarlaEnv:
         return self.lidar_data if self.lidar_data is not None else np.zeros((...))  # Default size/format
 
 
+    def create_hazardous_scenario(self):
+        """
+        Create a hazardous scenario in the environment.
+        This function will be called from the experiments script.
+        """
+        # Randomly select a type of hazard to create
+        hazard_type = random.choice(['static_obstacle', 'dynamic_event', 'weather_change'])
+
+        if hazard_type == 'static_obstacle':
+            self.create_static_obstacle()
+        elif hazard_type == 'dynamic_event':
+            self.create_dynamic_event()
+        elif hazard_type == 'weather_change':
+            self.change_weather_conditions()
+
+    def create_static_obstacle(self):
+        """
+        Spawn a static obstacle on the road.
+        """
+        obstacle_bp = self.world.get_blueprint_library().find('static.prop.streetbarrier')
+        obstacle_location = self.select_hazard_location()
+        self.world.spawn_actor(obstacle_bp, carla.Transform(obstacle_location))
+
+    def create_dynamic_event(self):
+        """
+        Create a dynamic event like sudden pedestrian crossing or vehicle breakdown.
+        """
+        # Example: Sudden pedestrian crossing
+        pedestrian_bp = self.world.get_blueprint_library().filter("walker.pedestrian.*")[0]
+        pedestrian_location = self.select_hazard_location(offset_y=3)  # Slightly offset from the road
+        self.world.spawn_actor(pedestrian_bp, carla.Transform(pedestrian_location))
+
+    def change_weather_conditions(self):
+        """
+        Change weather to adverse conditions.
+        """
+        # Example: Heavy rain
+        weather = carla.WeatherParameters(
+            cloudiness=80.0,
+            precipitation=100.0,
+            precipitation_deposits=50.0,
+            wind_intensity=50.0
+        )
+        self.world.set_weather(weather)
+
+    def select_hazard_location(self, offset_y=0):
+        """
+        Select a random location on the road to place the hazard.
+        """
+        map = self.world.get_map()
+        spawn_points = map.get_spawn_points()
+        hazard_location = random.choice(spawn_points).location
+        hazard_location.y += offset_y  # Adjusting position if needed
+        return hazard_location
+
     def reset(self):
         # Reset logic...
         return self.get_state()
@@ -300,3 +355,29 @@ class CarlaEnv:
 
 # Add additional methods as needed for retrieving data and conditions
 
+
+
+# each script and their key roles in the context of the mSAC implementation for hazard avoidance in CARLA:
+
+# environment.py
+# Role: This script is crucial for creating a realistic and interactive simulation environment within CARLA. It handles the initialization of the CARLA world, including setting up vehicles, sensors (like cameras and LIDAR), and the hazard detection model.
+# Key Focus: The primary goal is to simulate a dynamic environment where agents can perceive and interact with various elements, including hazardous conditions. The script should accurately capture environmental states and provide the necessary data to agents for decision-making. This involves processing sensor data and translating vehicle actions into the CARLA environment.
+# mSAC_models.py
+# Role: Houses the neural network architectures for the mSAC algorithm, specifically the Actor, Critic, and Mixing Network models. These models are responsible for learning the optimal policy and value functions.
+# Key Focus: The Actor model determines the best actions in given states, while the Critic assesses the quality of those actions. The Mixing Network is crucial for multi-agent scenarios, as it combines individual value functions into a global perspective, aiding in coordinated decision-making for hazard avoidance.
+# replay_buffer.py
+# Role: Implements the ReplayBuffer, a data structure that stores and retrieves experiences of agents (state, action, reward, next state, done). This is a key component for experience replay in reinforcement learning.
+# Key Focus: Efficiently manage past experiences to provide a diverse and informative set of data for training the agents. This helps in stabilizing and improving the learning process, especially in complex environments where hazards need to be detected and avoided.
+# traffic_manager_api.py
+# Role: Provides an interface to CARLA's Traffic Manager, which controls the behavior of non-player characters (NPCs) and traffic in the simulation.
+# Key Focus: Utilize the API to manipulate traffic scenarios and create challenging situations for testing and improving agents' hazard avoidance strategies. This script can help simulate realistic traffic conditions and unexpected events that require quick and effective responses from the agents.
+# experiments.py
+# Role: Orchestrates the training, testing, and evaluation of the mSAC agents within the CARLA environment. It sets up the environment, initializes agents, and runs the training and evaluation loops.
+# Key Focus: Conduct comprehensive experiments to test the effectiveness of the trained agents in hazard avoidance. This includes varying environmental conditions, introducing different types of hazards, and assessing agents' performance under different scenarios.
+# mSAC_train.py
+# Role: Contains the training loop where the agents interact with the environment, collect experiences, and update their policies and value functions based on the mSAC algorithm.
+# Key Focus: The script is central to optimizing the agents' learning process, ensuring they can accurately learn from their environment and improve their hazard avoidance strategies. It manages the balance between exploration and exploitation and updates the agents' neural networks.
+# mSAC_agent.py
+# Role: Defines the Agent class, which includes mechanisms for decision-making and learning. Each agent uses this class to select actions, update its policy, and learn from experiences.
+# Key Focus: Ensure that each agent can independently make informed decisions based on its perception of the environment and collaboratively work towards effective hazard avoidance. This involves managing the actor and critic updates and ensuring proper coordination among multiple agents.
+# By focusing on these specific roles and objectives, each script contributes to the overall goal of developing sophisticated agents capable of effectively navigating and avoiding hazards in a dynamic and realistic simulation environment.
