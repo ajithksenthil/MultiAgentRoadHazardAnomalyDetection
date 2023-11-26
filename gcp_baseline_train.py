@@ -7,17 +7,6 @@ from torch.utils.data import Dataset, DataLoader
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 from PIL import Image
 import numpy as np
-from torch.utils.tensorboard import SummaryWriter
-writer = SummaryWriter('runs/baselineproj')
-
-# import wandb
-# wandb.login()
-
-# Initialize Weights & Biases
-# wandb.init(project="baselineproject", entity="ajsen")
-
-from torch.profiler import profile, record_function, ProfilerActivity
-
 
 import torchvision.models as models
 from torchvision.models import resnet18, ResNet18_Weights
@@ -63,18 +52,11 @@ class ResNetBinaryClassifier(nn.Module):
         super(ResNetBinaryClassifier, self).__init__()
         # Load a pre-trained ResNet
         self.resnet = models.resnet18(weights=models.ResNet18_Weights.IMAGENET1K_V1)
-        # Remove the last fully connected layer
-        # self.resnet = nn.Sequential(*list(self.resnet.children())[:-1])
         # Add a new fully connected layer for binary classification
         num_features = self.resnet.fc.in_features  # Get the number of input features to the last layer
         self.resnet.fc = nn.Linear(num_features, 1)  # Replace with a new linear layer for binary classification
 
     def forward(self, x):
-        # # Feature extraction
-        # x = self.resnet(x)
-        # x = x.view(x.size(0), -1)  # Flatten
-        # # Binary classification
-        # x = self.fc(x)
         return self.resnet(x)
 
 
@@ -87,14 +69,12 @@ if __name__ == "__main__":
 
     # Hyperparameters
     learning_rate = 0.001
-    num_epochs = 10
+    num_epochs = 2
     batch_size = 32
 
     # Initialize model, optimizer, and TensorBoard
     model = ResNetBinaryClassifier().to(device)
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
-    writer = SummaryWriter()
-    # wandb.init(project="anomaly_detection")
 
     # Dataset and DataLoader
     image_dir = 'train/images/training/t1-3'
@@ -122,25 +102,13 @@ if __name__ == "__main__":
             # Forward pass
             outputs = model(images).squeeze()
 
-            # targets = targets.long()
-
-            # # Convert targets to one-hot format
-            # targets_one_hot = nn.functional.one_hot(targets, num_classes=2).to(torch.float32)
-            # targets_one_hot = targets_one_hot.to(torch.float32)
-
-
             loss = binary_loss(outputs, targets)
 
             # Backward pass and optimization
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-            for name, param in model.named_parameters():
-                if param.requires_grad and param.grad is not None:
-                    writer.add_histogram(f'{name}.grad', param.grad, epoch * len(data_loader) + batch_idx)
-            # Logging
-            writer.add_scalar('Loss/train', loss.item(), epoch * len(data_loader) + batch_idx)
-            # wandb.log({"Loss/train": loss.item(), "epoch": epoch})
+
             print(f"Epoch: {epoch+1}, Batch: {batch_idx+1}, Loss: {loss.item()}")
 
         # Validation Loop
@@ -153,9 +121,7 @@ if __name__ == "__main__":
                 images = images.to(device)
                 targets = (anomaly_masks.sum(dim=[1, 2, 3]) > 0).float().to(device)
                 outputs = model(images).squeeze()
-                # targets = targets.long()
-                # targets_one_hot = nn.functional.one_hot(targets, num_classes=2).to(torch.float32)
-                # targets_one_hot = targets_one_hot.to(torch.float32)
+
                 loss = binary_loss(outputs, targets)
 
                 val_loss += loss.item()
@@ -170,18 +136,13 @@ if __name__ == "__main__":
         recall = recall_score(all_targets, all_predictions, average='binary')
         f1 = f1_score(all_targets, all_predictions, average='binary')
 
-        # Log validation metrics
-        writer.add_scalar('Loss/val', val_loss, epoch)
-        writer.add_scalar('Accuracy/val', accuracy, epoch)
-        writer.add_scalar('Precision/val', precision, epoch)
-        writer.add_scalar('Recall/val', recall, epoch)
-        writer.add_scalar('F1/val', f1, epoch)
-
-        # wandb.log({"Loss/val": val_loss, "Accuracy/val": accuracy, "Precision/val": precision, "Recall/val": recall, "F1/val": f1, "epoch": epoch})
-
+  
         print(f"Epoch: {epoch+1} - Val Loss: {val_loss:.4f}, Accuracy: {accuracy:.4f}, Precision: {precision:.4f}, Recall: {recall:.4f}, F1: {f1:.4f}")
 
-    writer.close()
-    # wandb.finish()
 
     print("Training and validation completed.")
+
+    # After training, save the model's state dictionary
+    save_path = 'trained_model.pth'  # Define the path for saving the model
+    torch.save(model.state_dict(), save_path)
+    print(f"Model saved to {save_path}")
