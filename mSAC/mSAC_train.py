@@ -6,6 +6,10 @@ from mSAC_agent import Agent
 from replay_buffer import ReplayBuffer
 
 def train_mSAC(env, num_agents, max_episodes, max_timesteps, batch_size):
+
+    # reduce batch size TODO see if this works
+    batch_size = batch_size // 4
+
     # Define the mixing network
     mixing_network = MixingNetwork(num_agents=num_agents, state_dim=env.state_size)
 
@@ -14,6 +18,7 @@ def train_mSAC(env, num_agents, max_episodes, max_timesteps, batch_size):
                     hidden_dim=256) for _ in range(num_agents)]
 
     # Initialize replay buffer
+    print("initialized agents")
     buffer_size = 1000000
     replay_buffer = ReplayBuffer(buffer_size, num_agents)
 
@@ -42,6 +47,7 @@ def train_mSAC(env, num_agents, max_episodes, max_timesteps, batch_size):
 
     # Training Loop
     for episode in range(max_episodes):
+        print("episode", episode)
         states = env.reset()
         total_rewards = [0 for _ in range(num_agents)]
 
@@ -57,7 +63,7 @@ def train_mSAC(env, num_agents, max_episodes, max_timesteps, batch_size):
             if len(replay_buffer) > batch_size:
                 for i in range(num_agents):
                     samples = replay_buffer.sample(batch_size, i)
-                    agents[i].update_parameters(samples, mixing_network, i)
+                    agents[i].update_parameters(samples, i)
 
             states = next_states
             for i in range(num_agents):
@@ -71,6 +77,7 @@ def train_mSAC(env, num_agents, max_episodes, max_timesteps, batch_size):
                 avg_reward = evaluate_agent(agent, env, i)
                 print(f"Agent {i}, Episode {episode}, Evaluation Average Reward: {avg_reward}")
                 save_model(agent, episode, i)
+        torch.cuda.empty_cache()
 
     # Save final models and return agents
     for i, agent in enumerate(agents):

@@ -1,24 +1,18 @@
 # experiments.py
-
 import carla
 import os
 import sys
 from environment import CarlaEnv
 from mSAC_train import train_mSAC
-# from traffic_manager_api import TrafficManagerAPI
-# # Append the parent directory to sys.path
-# parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-# sys.path.append(parent_dir)
-# from gcp_baseline_train import ResNetBinaryClassifier
-
+import torch
 
 
 def run_experiment(client, traffic_manager, num_agents, num_episodes):
     env = CarlaEnv(client, traffic_manager)
 
     # Train mSAC agents
-    #TODO: now that we do not use hazard detection or traffic manager api in the agent class should we remove this? I removed it, lets see if it works
     agents = train_mSAC(env, num_agents, num_episodes, max_timesteps=1000, batch_size=128)
+    torch.cuda.empty_cache()
 
     # Simulation loop
     for episode in range(num_episodes):

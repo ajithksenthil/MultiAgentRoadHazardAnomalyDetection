@@ -12,14 +12,18 @@ sys.path.append(parent_dir)
 
 from gcp_baseline_train import ResNetBinaryClassifier
 import torch
+import torch.nn as nn
 import torchvision.transforms as transforms
 from PIL import Image
 
 
+# Set default CUDA device
+if torch.cuda.is_available():
+    torch.cuda.set_device(1)  # Set default device in case of multiple GPUs
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class CarlaEnv:
-    def __init__(self, client, traffic_manager):
+    def __init__(self, client, traffic_manager, num_agents):
         # Initialize CARLA world using provided client and traffic manager
         self.world = client.get_world()
 
@@ -27,17 +31,33 @@ class CarlaEnv:
         self.traffic_manager_api = TrafficManagerAPI(traffic_manager)
 
         # Initialize the hazard detection model
-        self.hazard_detection_model = ResNetBinaryClassifier().to(device)
+        self.hazard_detection_model = ResNetBinaryClassifier().to('cuda:1')
         model_path = '../trained_model.pth'  # Path to the model in the parent directory
-        self.hazard_detection_model.load_state_dict(torch.load(model_path, map_location=device))
+        self.hazard_detection_model.load_state_dict(torch.load(model_path, map_location='cuda:1'))
+        self.hazard_detection_model = nn.DataParallel(self.hazard_detection_model, device_ids=[1, 0])
+        self.hazard_detection_model = self.hazard_detection_model.to('cuda:1')
         self.hazard_detection_model.eval()
 
         # Vehicle and sensor setup
-        self.setup_vehicle_and_sensors()
+        self.camera_sensor_data = {}  # Dictionary to store camera data for each vehicle
+        self.setup_vehicle_and_sensors(num_agents=num_agents)
+
+        # Initialize data structures for storing individual vehicle states
+        self.anomaly_flags = [False] * num_agents
+        self.vehicle_states = [None] * num_agents
 
         # State and action dimensions
-        self.state_size = 10  # Define the size of the state TODO: this should be changed to the correct size
-        self.action_size = 5  # Define the size of the action TODO: this should be changed to the correct size
+        # Vehicle telemetry + environmental conditions + hazard detection
+        additional_data_size = 3 + 3 + 1  # telemetry (3) + environmental conditions (3) + hazard detection (1)
+
+        # Vehicle info
+        vehicle_info_size = 12  # location (3) + rotation (3) + velocity (3) + acceleration (3)
+
+        # Total state size
+        total_state_size = additional_data_size + vehicle_info_size
+
+        self.state_size = int(total_state_size)
+        self.action_size = 5  # Define the size of the action (3 for vehicle control and 2 for traffic manager control)
 
         # Define the transform for preprocessing the input image
         self.transform = transforms.Compose([
@@ -46,155 +66,235 @@ class CarlaEnv:
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
         ])
 
-        # Initialize the anomaly flag
-        self.anomaly_flag = False
 
-        # Number of points you expect in the point cloud
-        num_points = 1000  # Example value, adjust based on your application
+    def setup_vehicle_and_sensors(self, num_agents):
+        self.vehicles = []
+        self.camera_sensors = []
 
-        # Initialize lidar_data as a 2D array with 3 columns for XYZ coordinates
-        self.lidar_data = np.zeros((num_points, 3))
-
-    def setup_vehicle_and_sensors(self):
         # Vehicle setup
         blueprint_library = self.world.get_blueprint_library()
         vehicle_bp = blueprint_library.filter('model3')[0]
         spawn_points = self.world.get_map().get_spawn_points()
 
-        self.ego_vehicle = None
-        for spawn_point in spawn_points:
-            self.ego_vehicle = self.world.try_spawn_actor(vehicle_bp, spawn_point)
-            if self.ego_vehicle is not None:
-                break
+        for _ in range(num_agents):
+            vehicle = None
+            for spawn_point in spawn_points:
+                vehicle = self.world.try_spawn_actor(vehicle_bp, spawn_point)
+                if vehicle is not None:
+                    break
 
-        if not self.ego_vehicle:
-            raise RuntimeError("Failed to spawn vehicle: No free spawn points available.")
+            if not vehicle:
+                raise RuntimeError("Failed to spawn vehicle: No free spawn points available.")
 
-        # Sensor setup
-        camera_bp = blueprint_library.find('sensor.camera.rgb')
-        camera_transform = carla.Transform(carla.Location(x=1.5, z=2.4))  # Example position
-        self.camera_sensor = self.world.spawn_actor(camera_bp, camera_transform, attach_to=self.ego_vehicle)
-        self.camera_sensor.listen(lambda image_data: self.camera_callback(image_data))
+            self.vehicles.append(vehicle)
 
-        lidar_bp = blueprint_library.find('sensor.lidar.ray_cast')
-        lidar_transform = carla.Transform(carla.Location(x=0, z=2.5))  # Example position
-        self.lidar_sensor = self.world.spawn_actor(lidar_bp, lidar_transform, attach_to=self.ego_vehicle)
-        self.lidar_sensor.listen(lambda lidar_data: self.lidar_callback(lidar_data))
+            # Sensor setup for each vehicle
+            camera_bp = blueprint_library.find('sensor.camera.rgb')
+            camera_bp.set_attribute('sensor_tick', '0.1')
+            camera_transform = carla.Transform(carla.Location(x=1.5, z=2.4))  # Adjust as needed for each vehicle
+            camera_sensor = self.world.spawn_actor(camera_bp, camera_transform, attach_to=vehicle)
+            camera_sensor.listen(lambda image_data: self.camera_callback(image_data, vehicle.id))
+            self.camera_sensors.append(camera_sensor)
+
+
 
     def get_state(self):
-        # Retrieve various components of the state
-        sensor_data = self.retrieve_sensor_data()
-        vehicle_telemetry = self.get_vehicle_telemetry()
-        environmental_conditions = self.get_environmental_conditions()
 
-        # Assuming anomaly_flag is a boolean, convert it to an integer for concatenation
-        hazard_detection = 1 if self.anomaly_flag else 0
+        states = [] # Initialize an empty list to hold the states of all vehicles
 
-        # Extract and process sensor data (e.g., flattening, normalization) as needed
-        camera_data = sensor_data['camera'].flatten()  # Flatten or process as needed
-        lidar_data = sensor_data['lidar'].flatten()  # Flatten or process as needed
+        for idx, vehicle in enumerate(self.vehicles):
+            # Retrieve various components of the state
+            vehicle_telemetry = self.get_vehicle_telemetry(vehicle)
+            environmental_conditions = self.get_environmental_conditions()
 
-        # Include vehicle information in the state
-        # Extract vehicle information and flatten it
-        vehicle_info_dict = self.get_vehicle_info()
-        vehicle_info = np.array([vehicle_info_dict[key] for key in ['location', 'rotation', 'velocity', 'acceleration']]).flatten()
+            # Assuming anomaly_flag is a boolean, convert it to an integer for concatenation
+            hazard_detection = 1 if self.anomaly_flags[idx] else 0
 
-        # Concatenate all the components into a single array
-        state = np.concatenate([camera_data, lidar_data, vehicle_telemetry, environmental_conditions, [hazard_detection], vehicle_info])
-        return state
+            # Extract vehicle information and flatten it
+            vehicle_info_dict = self.get_vehicle_info(vehicle)
+            vehicle_info = np.array([vehicle_info_dict[key] for key in ['location', 'rotation', 'velocity', 'acceleration']]).flatten()
+
+            # Concatenate all the components into a single array
+            state = np.concatenate([vehicle_telemetry, environmental_conditions, [hazard_detection], vehicle_info])
+            states.append(state)  # Append the state of this vehicle to the states list
+
+        return states
     
-    def step(self, action):
+    def step(self, actions):
         """
-        Perform a step in the environment based on the given action.
+        Perform a step in the environment based on the given actions for each vehicle.
+
+        Args:
+            actions (list): A list of actions, one for each vehicle.
+
+        Returns:
+            next_states (list): The next states of all vehicles.
+            rewards (list): Rewards obtained by each vehicle.
+            done (bool): Whether the episode is finished.
+            info (dict): Additional information about the step.
         """
-        # Decompose the action into vehicle control and traffic manager control parts
-        vehicle_control_action = action['vehicle_control']
-        traffic_manager_action = action['traffic_manager_control']
+        rewards = []
+        anomaly_detected_flags = []
 
-        # Apply vehicle control
-        vehicle_control = carla.VehicleControl(
-            throttle=vehicle_control_action[0], 
-            steer=vehicle_control_action[1], 
-            brake=vehicle_control_action[2]
-        )
-        self.ego_vehicle.apply_control(vehicle_control)
+        for idx, vehicle in enumerate(self.vehicles):
+            action = actions[idx]  # Get the action for this vehicle
 
-        # Perform traffic manager related actions
-        self.perform_traffic_manager_control(traffic_manager_action)
+            # Decompose the action into vehicle control and traffic manager control parts
+            vehicle_control_action = action['vehicle_control']
+            traffic_manager_action = action['traffic_manager_control']
 
-        # Process sensor data
-        self.process_sensor_data()
+            # Apply vehicle control
+            self.apply_control_to_vehicle(vehicle, vehicle_control_action)
 
-        # Use the updated anomaly_flag as the hazard detection result
-        anomaly_detected = self.anomaly_flag
+            # Perform traffic manager related actions if applicable
+            self.perform_traffic_manager_control(vehicle, traffic_manager_action)
 
-        reward = self.calculate_reward(anomaly_detected, action)
-        # Get the next state, check if the episode is done, and any additional info
-        next_state = self.get_state()
+            # Update sensor data and hazard detection for this vehicle
+            self.process_sensor_data(vehicle)
+            anomaly_detected = self.detect_hazards_for_vehicle(vehicle)
+            self.anomaly_flags[idx] = anomaly_detected
+            anomaly_detected_flags.append(anomaly_detected)
+
+            # Calculate reward for this vehicle
+            reward = self.calculate_reward(vehicle, anomaly_detected, action)
+            rewards.append(reward)
+
+        # Check if the episode is done
         done = self.check_done()
-        info = {"anomaly": anomaly_detected}
-        
-        return next_state, reward, done, info
 
+        # Get the next state for all vehicles
+        next_states = self.get_state()
 
-    def apply_control_to_vehicle(self, control_actions):
+        info = {"anomaly": anomaly_detected_flags}
+
+        return next_states, rewards, done, info
+
+    def calculate_reward(self, vehicle, anomaly_detected, action):
         """
-        Apply control actions to the ego vehicle.
+        Calculate the reward for a vehicle based on anomaly detection and other factors.
+
+        Args:
+            vehicle: The vehicle for which to calculate the reward.
+            anomaly_detected (bool): Whether an anomaly was detected.
+            action: The action taken by the vehicle.
+
+        Returns:
+            float: The calculated reward for the vehicle.
         """
-        throttle, steer, brake = control_actions
+        reward = 0.0
+
+        # Penalize for proximity to hazards (example calculation, adjust as needed)
+        hazard_proximity = self.calculate_hazard_proximity(vehicle)
+        reward -= self.hazard_proximity_penalty(hazard_proximity)
+
+        # Reward for detecting an anomaly
+        if anomaly_detected:
+            reward += 50  # Positive reward for detecting an anomaly
+
+        # Additional considerations based on the action taken
+        # Example: Penalize for risky maneuvers or excessive speed
+
+        return reward
+
+    def hazard_proximity_penalty(self, proximity):
+        """
+        Calculate a penalty based on the proximity to a hazard.
+
+        Args:
+            proximity (float): The proximity to the nearest hazard.
+
+        Returns:
+            float: The penalty for being close to a hazard.
+        """
+        # Example penalty calculation, modify based on your hazard proximity measure
+        penalty = max(0, 50 - proximity * 10)  # Linear penalty as an example
+        return penalty
+
+    def calculate_hazard_proximity(self, vehicle):
+        """
+        Calculate the proximity of a vehicle to the nearest hazard.
+
+        Args:
+            vehicle: The vehicle for which to calculate the hazard proximity.
+
+        Returns:
+            float: The proximity to the nearest hazard.
+        """
+        # Implement logic to calculate the distance to the nearest hazard
+        # This is an example and needs to be adjusted based on your environment
+        nearest_hazard_distance = self.get_nearest_hazard_distance(vehicle)
+        return nearest_hazard_distance
+
+    def apply_control_to_vehicle(self, vehicle, control_actions):
+        """
+        Apply control actions to a specific vehicle.
+
+        Args:
+            vehicle (carla.Vehicle): The vehicle to control.
+            control_actions (dict): Control actions including throttle, steer, and brake.
+        """
+        throttle, steer, brake = control_actions['throttle'], control_actions['steer'], control_actions['brake']
         control = carla.VehicleControl(throttle=throttle, steer=steer, brake=brake)
-        self.ego_vehicle.apply_control(control)
+        vehicle.apply_control(control)
     
-    def perform_traffic_manager_control(self, action):
+    def perform_traffic_manager_control(self, vehicle, action):
         """
-        Perform actions related to traffic manager control.
+        Perform traffic manager control actions for a specific vehicle.
+
+        Args:
+            vehicle (carla.Vehicle): The vehicle to apply traffic manager actions to.
+            action (dict): Traffic manager actions including lane change and speed adjustment.
         """
-        # Extract traffic manager control actions from the provided action dictionary
         lane_change_decision = action['lane_change']
         speed_adjustment = action['speed_adjustment']
 
         # Perform lane change if necessary
         if lane_change_decision == "left":
-            self.traffic_manager_api.force_lane_change(self.ego_vehicle, to_left=True)
+            self.traffic_manager_api.force_lane_change(vehicle, to_left=True)
         elif lane_change_decision == "right":
-            self.traffic_manager_api.force_lane_change(self.ego_vehicle, to_left=False)
+            self.traffic_manager_api.force_lane_change(vehicle, to_left=False)
 
         # Adjust speed if necessary
         if speed_adjustment != 0:
-            current_speed_limit = self.traffic_manager_api.get_speed_limit(self.ego_vehicle)
+            current_speed_limit = self.traffic_manager_api.get_speed_limit(vehicle)
             new_speed_limit = current_speed_limit + speed_adjustment
-            self.traffic_manager_api.set_speed_limit(self.ego_vehicle, new_speed_limit)
+            self.traffic_manager_api.set_speed_limit(vehicle, new_speed_limit)
 
 
-    def camera_callback(self, image_data):
+
+    def camera_callback(self, image_data, vehicle_id):
         # Process the image data
         array = np.frombuffer(image_data.raw_data, dtype=np.dtype("uint8"))
         array = np.reshape(array, (image_data.height, image_data.width, 4))
-        self.camera_data = array[:, :, :3]  # Store RGB data
+        camera_data = array[:, :, :3]  # Store RGB data
+        self.camera_sensor_data[vehicle_id] = camera_data
         # Perform hazard detection
-        hazard_detected = self.detect_hazards_in_image(self.camera_data)
+        hazard_detected = self.detect_hazards_in_image(camera_data)
 
-        # Update the anomaly flag based on hazard detection
-        self.anomaly_flag = hazard_detected
+        # Update the anomaly flag based on hazard detection for the specific vehicle
+        # You might want to maintain a dictionary of anomaly flags for each vehicle
+        self.anomaly_flags[vehicle_id] = hazard_detected
+
     
-    def retrieve_camera_data(self):
-        # Return the latest processed camera data
-        return self.camera_data if self.camera_data is not None else np.zeros((800, 600, 3))
 
-    def retrieve_lidar_data(self):
-        # Return the latest processed LIDAR data
-        return self.lidar_data if self.lidar_data is not None else np.zeros((100, 100))  # Default size/format
 
-    def get_vehicle_info(self):
+    def retrieve_camera_data(self, vehicle_id):
+        # Retrieve the latest processed camera data for a specific vehicle
+        return self.camera_sensor_data.get(vehicle_id, np.zeros((800, 600, 3)))
+
+
+    def get_vehicle_info(self, vehicle):
         """
-        Retrieve information about the ego vehicle.
-        """
-        location = self.ego_vehicle.get_location()
-        rotation = self.ego_vehicle.get_transform().rotation
-        velocity = self.ego_vehicle.get_velocity()
-        acceleration = self.ego_vehicle.get_acceleration()
+        Retrieve information about a specific vehicle.
 
-        # Compile the information into a dictionary or a custom object
+        Args:
+            vehicle (carla.Vehicle): The vehicle to retrieve information for.
+        """
+        location = vehicle.get_location()
+        rotation = vehicle.get_transform().rotation
+        velocity = vehicle.get_velocity()
+        acceleration = vehicle.get_acceleration()
+
         vehicle_info = {
             'location': (location.x, location.y, location.z),
             'rotation': (rotation.pitch, rotation.yaw, rotation.roll),
@@ -202,6 +302,40 @@ class CarlaEnv:
             'acceleration': (acceleration.x, acceleration.y, acceleration.z)
         }
         return vehicle_info
+
+    def get_vehicle_telemetry(self, vehicle):
+        """
+        Get telemetry data for a specific vehicle.
+
+        Args:
+            vehicle (carla.Vehicle): The vehicle to get telemetry data for.
+        """
+        velocity = vehicle.get_velocity()
+        acceleration = vehicle.get_acceleration()
+        wheel_angle = vehicle.get_control().steer
+
+        speed = np.sqrt(velocity.x**2 + velocity.y**2 + velocity.z**2)
+        acc = np.sqrt(acceleration.x**2 + acceleration.y**2 + acceleration.z**2)
+
+        telemetry_data = np.array([speed, acc, wheel_angle])
+        return telemetry_data
+
+    def get_environmental_conditions(self):
+        # Placeholder for environmental conditions
+        # Example: Weather conditions, time of day, etc.
+        weather = self.world.get_weather()
+        time_of_day = self.world.get_snapshot().timestamp.elapsed_seconds
+
+        # Convert to numerical values (this is a simplified example)
+        weather_condition = np.array([weather.cloudiness, weather.precipitation, weather.wind_intensity])
+        time_data = np.array([time_of_day])
+
+        # Combine into a single array
+        environmental_data = np.concatenate([weather_condition, time_data])
+        return environmental_data
+    
+
+    # environment interaction methods
 
     def create_hazardous_scenario(self):
         """
@@ -259,33 +393,39 @@ class CarlaEnv:
         return hazard_location
 
     def reset(self):
-        # Reset logic...
+        # Reset logic...needs to get states for multi agent set up, 2d array where we can use it in the train script and iterate over each state for each vehicle
         return self.get_state()
     
     
     def process_sensor_data(self):
-        # Processing camera data
+        # Processing camera data # TODO modify for multi agent
         camera_data = self.retrieve_camera_data()
         hazards_detected = self.detect_hazards_in_image(camera_data)
 
         # Update the anomaly flag based on hazard detection
         self.anomaly_flag = hazards_detected
-
-        # Processing LIDAR data
-        lidar_data = self.retrieve_lidar_data()
-        processed_lidar_data = self.process_lidar_data(lidar_data)
-        self.lidar_data = processed_lidar_data
-
-        # Update sensor data
-        self.current_sensor_state = {'camera': camera_data, 'lidar': processed_lidar_data}
+        self.current_sensor_state = {'camera': camera_data}
    
 
-    def detect_hazards_in_image(self, image):
+    def detect_hazards_for_vehicle(self, vehicle):
+        """
+        Detect hazards for a specific vehicle and get its location.
+
+        Args:
+            vehicle: The vehicle for which to detect hazards.
+
+        Returns:
+            tuple: A tuple containing a boolean indicating whether a hazard is detected 
+                and the location of the vehicle.
+        """
+        # Retrieve the image data from the vehicle's sensor
+        image_data = self.get_image_data_from_vehicle(vehicle)
+
         # Convert the raw image data to a PIL image
-        pil_image = Image.fromarray(image).convert('RGB')
+        pil_image = Image.fromarray(image_data).convert('RGB')
 
         # Apply the transformations
-        input_tensor = self.transform(pil_image).unsqueeze(0).to(device)
+        input_tensor = self.transform(pil_image).unsqueeze(0).to('cuda:1')
 
         # Predict with the model
         with torch.no_grad():
@@ -294,98 +434,28 @@ class CarlaEnv:
 
         # Determine if a hazard is detected based on the prediction threshold
         hazard_detected = prediction > 0.5  # adjust the threshold as needed
-        return hazard_detected
 
-    
-    # Helper methods for processing each type of sensor data
-    def process_camera_data(self, image):
-        # Convert the CARLA image to a numpy array
-        image_array = np.frombuffer(image.raw_data, dtype=np.dtype("uint8"))
-        image_array = np.reshape(image_array, (image.height, image.width, 4))  # Assuming RGBA format
-        return image_array[:, :, :3]  # Return RGB part
+        # Get the vehicle's location
+        vehicle_info_dict = self.get_vehicle_info(vehicle)
+        vehicle_location = vehicle_info_dict["location"]
 
-    def process_lidar_data(self, lidar_data):
-        """
-        Convert LIDAR data to a 3D point cloud representation.
-        """
-        # Convert the raw data into an array of floats
-        points = np.frombuffer(lidar_data.raw_data, dtype=np.float32).reshape(-1, 4)
-        # Use XYZ coordinates and ignore intensity for now
-        point_cloud = points[:, :3]
-        return point_cloud
+        return hazard_detected, vehicle_location
 
 
-    def calculate_reward(self, anomaly_detected):
-        # Calculate reward based on the presence of anomalies and other factors
-        reward = 0.0
-        if anomaly_detected:
-            reward -= 50  # Penalize for hazard proximity
-        # Additional reward calculations
-        return reward
 
 
     def retrieve_sensor_data(self):
         """
         Retrieve and combine processed data from all sensors.
         """
+        # TODO modify for multi agent
         camera_data = self.retrieve_camera_data()
-        lidar_data = self.retrieve_lidar_data()
-
         sensor_data = {
-            'camera': camera_data,
-            'lidar': lidar_data
+            'camera': camera_data
         }
 
-        # Ensure both data arrays are compatible for concatenation
         # Additional processing might be required here
         return sensor_data
-
-    def lidar_callback(self, lidar_data):
-        """
-        Callback function to process LIDAR data.
-        
-        This function is triggered when new LIDAR data is available. It processes the raw LIDAR data
-        and updates the internal state with the processed data for use in the simulation.
-        
-        Args:
-            lidar_data: The raw LIDAR data received from the sensor.
-        """
-        
-        # Process the LIDAR data using the designated method
-        processed_lidar_data = self.process_lidar_data(lidar_data)
-
-        # Update the internal state or class attribute with the processed LIDAR data
-        self.lidar_data = processed_lidar_data
-
-    def get_vehicle_telemetry(self):
-        # Get vehicle telemetry data
-        velocity = self.ego_vehicle.get_velocity()
-        acceleration = self.ego_vehicle.get_acceleration()
-        wheel_angle = self.ego_vehicle.get_control().steer
-
-        # Convert to numerical values
-        speed = np.sqrt(velocity.x**2 + velocity.y**2 + velocity.z**2)
-        acc = np.sqrt(acceleration.x**2 + acceleration.y**2 + acceleration.z**2)
-
-        # Combine into a single array
-        telemetry_data = np.array([speed, acc, wheel_angle])
-        return telemetry_data
-
-    def get_environmental_conditions(self):
-        # Placeholder for environmental conditions
-        # Example: Weather conditions, time of day, etc.
-        weather = self.world.get_weather()
-        time_of_day = self.world.get_snapshot().timestamp.elapsed_seconds
-
-        # Convert to numerical values (this is a simplified example)
-        weather_condition = np.array([weather.cloudiness, weather.precipitation, weather.wind_intensity])
-        time_data = np.array([time_of_day])
-
-        # Combine into a single array
-        environmental_data = np.concatenate([weather_condition, time_data])
-        return environmental_data
-    
-
 
     def check_done(self):
         if self.reached_destination() or self.encountered_major_hazard() or self.exceeded_time_limit():
@@ -414,35 +484,5 @@ class CarlaEnv:
         if self.camera_sensor:
             self.camera_sensor.stop()  # Stop listening
             self.camera_sensor.destroy()
-        if self.lidar_sensor:
-            self.lidar_sensor.stop()  # Stop listening
-            self.lidar_sensor.destroy()
 
 # Add additional methods as needed for retrieving data and conditions
-
-
-
-# each script and their key roles in the context of the mSAC implementation for hazard avoidance in CARLA:
-
-# environment.py
-# Role: This script is crucial for creating a realistic and interactive simulation environment within CARLA. It handles the initialization of the CARLA world, including setting up vehicles, sensors (like cameras and LIDAR), and the hazard detection model.
-# Key Focus: The primary goal is to simulate a dynamic environment where agents can perceive and interact with various elements, including hazardous conditions. The script should accurately capture environmental states and provide the necessary data to agents for decision-making. This involves processing sensor data and translating vehicle actions into the CARLA environment.
-# mSAC_models.py
-# Role: Houses the neural network architectures for the mSAC algorithm, specifically the Actor, Critic, and Mixing Network models. These models are responsible for learning the optimal policy and value functions.
-# Key Focus: The Actor model determines the best actions in given states, while the Critic assesses the quality of those actions. The Mixing Network is crucial for multi-agent scenarios, as it combines individual value functions into a global perspective, aiding in coordinated decision-making for hazard avoidance.
-# replay_buffer.py
-# Role: Implements the ReplayBuffer, a data structure that stores and retrieves experiences of agents (state, action, reward, next state, done). This is a key component for experience replay in reinforcement learning.
-# Key Focus: Efficiently manage past experiences to provide a diverse and informative set of data for training the agents. This helps in stabilizing and improving the learning process, especially in complex environments where hazards need to be detected and avoided.
-# traffic_manager_api.py
-# Role: Provides an interface to CARLA's Traffic Manager, which controls the behavior of non-player characters (NPCs) and traffic in the simulation.
-# Key Focus: Utilize the API to manipulate traffic scenarios and create challenging situations for testing and improving agents' hazard avoidance strategies. This script can help simulate realistic traffic conditions and unexpected events that require quick and effective responses from the agents.
-# experiments.py
-# Role: Orchestrates the training, testing, and evaluation of the mSAC agents within the CARLA environment. It sets up the environment, initializes agents, and runs the training and evaluation loops.
-# Key Focus: Conduct comprehensive experiments to test the effectiveness of the trained agents in hazard avoidance. This includes varying environmental conditions, introducing different types of hazards, and assessing agents' performance under different scenarios.
-# mSAC_train.py
-# Role: Contains the training loop where the agents interact with the environment, collect experiences, and update their policies and value functions based on the mSAC algorithm.
-# Key Focus: The script is central to optimizing the agents' learning process, ensuring they can accurately learn from their environment and improve their hazard avoidance strategies. It manages the balance between exploration and exploitation and updates the agents' neural networks.
-# mSAC_agent.py
-# Role: Defines the Agent class, which includes mechanisms for decision-making and learning. Each agent uses this class to select actions, update its policy, and learn from experiences.
-# Key Focus: Ensure that each agent can independently make informed decisions based on its perception of the environment and collaboratively work towards effective hazard avoidance. This involves managing the actor and critic updates and ensuring proper coordination among multiple agents.
-# By focusing on these specific roles and objectives, each script contributes to the overall goal of developing sophisticated agents capable of effectively navigating and avoiding hazards in a dynamic and realistic simulation environment.
