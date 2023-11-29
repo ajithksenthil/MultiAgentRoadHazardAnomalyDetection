@@ -1,7 +1,6 @@
 # mSAC_train.py
 import os
 import torch
-from mSAC_models import Actor, Critic, MixingNetwork
 from mSAC_agent import Agent
 from replay_buffer import ReplayBuffer
 
@@ -9,9 +8,6 @@ def train_mSAC(env, num_agents, max_episodes, max_timesteps, batch_size):
 
     # reduce batch size TODO see if this works
     batch_size = batch_size // 4
-
-    # Define the mixing network
-    mixing_network = MixingNetwork(num_agents=num_agents, state_dim=env.state_size)
 
     # Initialize agents and their optimizers
     agents = [Agent(state_dim=env.state_size, action_dim=env.action_size, num_agents=num_agents,

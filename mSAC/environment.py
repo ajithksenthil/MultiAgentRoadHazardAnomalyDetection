@@ -183,48 +183,16 @@ class CarlaEnv:
         """
         reward = 0.0
 
-        # Penalize for proximity to hazards (example calculation, adjust as needed)
-        hazard_proximity = self.calculate_hazard_proximity(vehicle)
-        reward -= self.hazard_proximity_penalty(hazard_proximity)
-
-        # Reward for detecting an anomaly
+        # Penalize if a hazard is detected
         if anomaly_detected:
-            reward += 50  # Positive reward for detecting an anomaly
+            reward -= 50  # Negative reward for encountering a hazard
 
         # Additional considerations based on the action taken
-        # Example: Penalize for risky maneuvers or excessive speed
+        # Example: Reward for safe driving actions, penalize for risky maneuvers
 
         return reward
 
-    def hazard_proximity_penalty(self, proximity):
-        """
-        Calculate a penalty based on the proximity to a hazard.
-
-        Args:
-            proximity (float): The proximity to the nearest hazard.
-
-        Returns:
-            float: The penalty for being close to a hazard.
-        """
-        # Example penalty calculation, modify based on your hazard proximity measure
-        penalty = max(0, 50 - proximity * 10)  # Linear penalty as an example
-        return penalty
-
-    def calculate_hazard_proximity(self, vehicle):
-        """
-        Calculate the proximity of a vehicle to the nearest hazard.
-
-        Args:
-            vehicle: The vehicle for which to calculate the hazard proximity.
-
-        Returns:
-            float: The proximity to the nearest hazard.
-        """
-        # Implement logic to calculate the distance to the nearest hazard
-        # This is an example and needs to be adjusted based on your environment
-        nearest_hazard_distance = self.get_nearest_hazard_distance(vehicle)
-        return nearest_hazard_distance
-
+   
     def apply_control_to_vehicle(self, vehicle, control_actions):
         """
         Apply control actions to a specific vehicle.
@@ -269,7 +237,7 @@ class CarlaEnv:
         camera_data = array[:, :, :3]  # Store RGB data
         self.camera_sensor_data[vehicle_id] = camera_data
         # Perform hazard detection
-        hazard_detected = self.detect_hazards_in_image(camera_data)
+        hazard_detected = self.detect_hazards_for_vehicle(self.vehicles[vehicle_id]) #MODIFIED switch to detect_hazard_for_vehicle
 
         # Update the anomaly flag based on hazard detection for the specific vehicle
         # You might want to maintain a dictionary of anomaly flags for each vehicle
@@ -393,17 +361,37 @@ class CarlaEnv:
         return hazard_location
 
     def reset(self):
-        # Reset logic...needs to get states for multi agent set up, 2d array where we can use it in the train script and iterate over each state for each vehicle
+        # Reset logic
+        # Clean up existing vehicles and sensors before resetting
+        self.cleanup()
+
+        # Logic to reset and initialize the environment
+        # Setup vehicles and sensors for the new episode
+        self.setup_vehicle_and_sensors(self.num_agents)
         return self.get_state()
     
-    
-    def process_sensor_data(self):
-        # Processing camera data # TODO modify for multi agent
-        camera_data = self.retrieve_camera_data()
-        hazards_detected = self.detect_hazards_in_image(camera_data)
+    def cleanup(self):
+        # Iterate over all vehicles and their sensors to destroy them
+        for vehicle in self.vehicles:
+            if vehicle:
+                vehicle.destroy()  # Destroy the vehicle
+
+        for sensor in self.camera_sensors:
+            if sensor:
+                sensor.stop()  # Stop listening
+                sensor.destroy()  # Destroy the sensor
+
+        # Clear the lists after destroying the objects
+        self.vehicles.clear()
+        self.camera_sensors.clear()
+
+    def process_sensor_data(self, vehicle):
+        # Processing camera data # MODIFIED modify for multi agent
+        camera_data = self.retrieve_camera_data(vehicle_id=vehicle.id) #MODIFIED need to modify for passing in specific vehicle, this might be unnecessary
+        hazards_detected = self.detect_hazards_for_vehicle(vehicle=vehicle) #MODIFIED switch to detect_hazard_for_vehicle
 
         # Update the anomaly flag based on hazard detection
-        self.anomaly_flag = hazards_detected
+        self.anomaly_flags[vehicle.id] = hazards_detected
         self.current_sensor_state = {'camera': camera_data}
    
 
@@ -419,7 +407,7 @@ class CarlaEnv:
                 and the location of the vehicle.
         """
         # Retrieve the image data from the vehicle's sensor
-        image_data = self.get_image_data_from_vehicle(vehicle)
+        image_data = self.retrieve_camera_data(vehicle.id)
 
         # Convert the raw image data to a PIL image
         pil_image = Image.fromarray(image_data).convert('RGB')
@@ -442,47 +430,22 @@ class CarlaEnv:
         return hazard_detected, vehicle_location
 
 
-
-
-    def retrieve_sensor_data(self):
-        """
-        Retrieve and combine processed data from all sensors.
-        """
-        # TODO modify for multi agent
-        camera_data = self.retrieve_camera_data()
-        sensor_data = {
-            'camera': camera_data
-        }
-
-        # Additional processing might be required here
-        return sensor_data
-
     def check_done(self):
-        if self.reached_destination() or self.encountered_major_hazard() or self.exceeded_time_limit():
+        """
+        Check if the episode should be terminated.
+
+        Returns:
+            bool: True if the episode is done, False otherwise.
+        """
+        # # Time limit check
+        # if self.current_time >= self.max_time:
+        #     return True
+
+        # Hazard encounter check
+        if all(self.anomaly_flags):
             return True
+
         return False
-    
-    def reached_destination(self):
-        # Placeholder logic for checking if the destination is reached
-        # For example, checking the vehicle's position against a target location
-        return False  # Replace with actual logic
 
-    def exceeded_time_limit(self):
-        # Check if the time limit for the episode is exceeded
-        # You need to define and update a variable that tracks the elapsed time
-        return False  # Replace with actual logic
-
-    def encountered_major_hazard(self):
-        # Logic to determine if a major hazard is encountered
-        # For example, checking for collisions or proximity to hazards
-        return False  # Replace with actual logic
-
-    def cleanup(self):
-        # Destroy the vehicle and sensors
-        if self.ego_vehicle:
-            self.ego_vehicle.destroy()
-        if self.camera_sensor:
-            self.camera_sensor.stop()  # Stop listening
-            self.camera_sensor.destroy()
 
 # Add additional methods as needed for retrieving data and conditions
