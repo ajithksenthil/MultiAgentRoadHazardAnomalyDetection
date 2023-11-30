@@ -37,34 +37,39 @@ class Agent:
         # Clear the cache after initializing all components
         torch.cuda.empty_cache()
 
+    
     def select_action(self, state, agent_idx):
         # Convert state to tensor and sample action from the actor network
         if not isinstance(state, np.ndarray):
             state = np.array(state)
 
         state_tensor = torch.FloatTensor(state).to(device).unsqueeze(0)
-
-        # Access the 'module' attribute to call 'sample'
         raw_action, log_prob, hx = self.actors[agent_idx].module.sample(state_tensor, self.actor_hxs[agent_idx])
         self.actor_hxs[agent_idx] = hx.detach()
 
-        # Assuming raw_action contains values for vehicle control (throttle, steer, brake)
-        # and traffic manager control (lane_change, speed_adjustment)
-        # The exact structure and indexing depend on how your network outputs the action
+        # Remove the batch dimension if it's present
+        if raw_action.dim() > 1:
+            raw_action = raw_action.squeeze(0)
+
+        # Check the shape of the raw_action tensor
+        expected_shape = (5,)  # Adjust based on your expected action dimensions
+        if raw_action.shape != expected_shape:
+            raise ValueError(f"Unexpected shape of raw_action: {raw_action.shape}, expected: {expected_shape}")
+
+        # Process the action
         action = {
             'vehicle_control': {
-                'throttle': raw_action[0].item(),  # Assuming first element is throttle
-                'steer': raw_action[1].item(),     # Assuming second element is steering
-                'brake': raw_action[2].item()      # Assuming third element is braking
+                'throttle': raw_action[0].item(),
+                'steer': raw_action[1].item(),
+                'brake': raw_action[2].item()
             },
             'traffic_manager_control': {
-                'lane_change': raw_action[3].item(),       # Assuming fourth element is lane change decision
-                'speed_adjustment': raw_action[4].item()   # Assuming fifth element is speed adjustment
+                'lane_change': raw_action[3].item(),
+                'speed_adjustment': raw_action[4].item()
             }
         }
 
         return action, log_prob
-
 
 
     def update_parameters(self, batch, agent_idx):

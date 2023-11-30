@@ -8,25 +8,36 @@ import torch
 
 
 def run_experiment(client, traffic_manager, num_agents, num_episodes):
-    env = CarlaEnv(client, traffic_manager)
+    env = CarlaEnv(client, traffic_manager, num_agents)
 
     # Train mSAC agents
     agents = train_mSAC(env, num_agents, num_episodes, max_timesteps=1000, batch_size=128)
     torch.cuda.empty_cache()
+    print("finished training mSAC")
 
     # Simulation loop
     for episode in range(num_episodes):
-        state = env.reset()
-        total_reward = 0
+        states = env.reset()  # states shape: [num_agents, state_size]
+        total_rewards = [0 for _ in range(num_agents)]
         done = False
-        while not done:
-            # Generate actions for each agent
-            actions = [agent.select_action(state, idx) for idx, agent in enumerate(agents)]
-            next_state, rewards, done, info = env.step(actions)
-            state = next_state
-            total_reward += sum(rewards)
-        print(f"Episode: {episode+1}, Total Reward: {total_reward}")
 
+        while not done:
+            actions = []
+            for idx, agent in enumerate(agents):
+                agent_state = states[idx]  # Get the state for this specific agent
+                action, _ = agent.select_action(agent_state, idx)
+                actions.append(action)
+
+            next_states, rewards, done, info = env.step(actions)
+            states = next_states
+
+            # Accumulate rewards for each agent
+            for i, reward in enumerate(rewards):
+                total_rewards[i] += reward
+
+        print(f"Episode: {episode+1}, Total Rewards: {total_rewards}")
+    
+    print("finished simulation")
 
     env.cleanup()
 
@@ -35,8 +46,9 @@ if __name__ == '__main__':
     client.set_timeout(10.0)
     traffic_manager = client.get_trafficmanager(8000)
     traffic_manager.set_synchronous_mode(True)
-    
+
     run_experiment(client, traffic_manager, num_agents=5, num_episodes=100)
+
 
 
 

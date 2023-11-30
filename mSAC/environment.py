@@ -24,11 +24,23 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class CarlaEnv:
     def __init__(self, client, traffic_manager, num_agents):
+        self.num_agents = num_agents
+        # Define the transform for preprocessing the input image
+        self.transform = transforms.Compose([
+            transforms.Resize((224, 224)),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        ])
+
+        # Initialize data structures for storing individual vehicle states
+        self.anomaly_flags = [False] * num_agents
+        self.vehicle_states = [None] * num_agents
+
         # Initialize CARLA world using provided client and traffic manager
         self.world = client.get_world()
 
         # Configure Traffic Manager using provided traffic manager
-        self.traffic_manager_api = TrafficManagerAPI(traffic_manager)
+        self.traffic_manager_api = TrafficManagerAPI(traffic_manager, world=self.world)
 
         # Initialize the hazard detection model
         self.hazard_detection_model = ResNetBinaryClassifier().to('cuda:1')
@@ -42,34 +54,28 @@ class CarlaEnv:
         self.camera_sensor_data = {}  # Dictionary to store camera data for each vehicle
         self.setup_vehicle_and_sensors(num_agents=num_agents)
 
-        # Initialize data structures for storing individual vehicle states
-        self.anomaly_flags = [False] * num_agents
-        self.vehicle_states = [None] * num_agents
+        
 
         # State and action dimensions
         # Vehicle telemetry + environmental conditions + hazard detection
-        additional_data_size = 3 + 3 + 1  # telemetry (3) + environmental conditions (3) + hazard detection (1)
+        additional_data_size = 3 + 4 + 1  # telemetry (3) + environmental conditions (4) + hazard detection (1)
 
         # Vehicle info
         vehicle_info_size = 12  # location (3) + rotation (3) + velocity (3) + acceleration (3)
 
-        # Total state size
+        # Total state size #TODO change for the fact we have multiple agents
         total_state_size = additional_data_size + vehicle_info_size
 
         self.state_size = int(total_state_size)
-        self.action_size = 5  # Define the size of the action (3 for vehicle control and 2 for traffic manager control)
+        self.action_size = 5  # Define the size of the action (3 for vehicle control and 2 for traffic manager control) #TODO change for multiple agents
 
-        # Define the transform for preprocessing the input image
-        self.transform = transforms.Compose([
-            transforms.Resize((224, 224)),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-        ])
+        
 
 
     def setup_vehicle_and_sensors(self, num_agents):
         self.vehicles = []
         self.camera_sensors = []
+        self.vehicle_id_to_index = {}  # Mapping from vehicle ID to index in self.vehicles
 
         # Vehicle setup
         blueprint_library = self.world.get_blueprint_library()
@@ -87,13 +93,14 @@ class CarlaEnv:
                 raise RuntimeError("Failed to spawn vehicle: No free spawn points available.")
 
             self.vehicles.append(vehicle)
+            self.vehicle_id_to_index[vehicle.id] = len(self.vehicles) - 1  # Map vehicle id to its index
 
             # Sensor setup for each vehicle
             camera_bp = blueprint_library.find('sensor.camera.rgb')
             camera_bp.set_attribute('sensor_tick', '0.1')
             camera_transform = carla.Transform(carla.Location(x=1.5, z=2.4))  # Adjust as needed for each vehicle
             camera_sensor = self.world.spawn_actor(camera_bp, camera_transform, attach_to=vehicle)
-            camera_sensor.listen(lambda image_data: self.camera_callback(image_data, vehicle.id))
+            camera_sensor.listen(lambda image_data, vid=vehicle.id: self.camera_callback(image_data, vid))
             self.camera_sensors.append(camera_sensor)
 
 
@@ -192,6 +199,29 @@ class CarlaEnv:
 
         return reward
 
+    def default_action(self):
+        """
+        Return a default action for the agents.
+
+        The structure of this action should match the expected structure
+        of actions in this environment.
+
+        Returns:
+            dict: A default action.
+        """
+        # Example: If an action is a dictionary with 'vehicle_control' and 'traffic_manager_control'
+        default_action = {
+            'vehicle_control': {
+                'throttle': 0.0,
+                'steer': 0.0,
+                'brake': 0.0
+            },
+            'traffic_manager_control': {
+                'lane_change': 'none',  # Assuming 'none' is a valid value
+                'speed_adjustment': 0.0
+            }
+        }
+        return default_action
    
     def apply_control_to_vehicle(self, vehicle, control_actions):
         """
@@ -224,24 +254,25 @@ class CarlaEnv:
 
         # Adjust speed if necessary
         if speed_adjustment != 0:
-            current_speed_limit = self.traffic_manager_api.get_speed_limit(vehicle)
-            new_speed_limit = current_speed_limit + speed_adjustment
-            self.traffic_manager_api.set_speed_limit(vehicle, new_speed_limit)
+            # Adjust the speed of the vehicle
+            desired_speed = vehicle.get_velocity().length() + speed_adjustment
+            self.traffic_manager_api.set_desired_speed(vehicle, desired_speed)
 
 
 
     def camera_callback(self, image_data, vehicle_id):
+        vehicle_index = self.vehicle_id_to_index[vehicle_id]
         # Process the image data
         array = np.frombuffer(image_data.raw_data, dtype=np.dtype("uint8"))
         array = np.reshape(array, (image_data.height, image_data.width, 4))
         camera_data = array[:, :, :3]  # Store RGB data
         self.camera_sensor_data[vehicle_id] = camera_data
         # Perform hazard detection
-        hazard_detected = self.detect_hazards_for_vehicle(self.vehicles[vehicle_id]) #MODIFIED switch to detect_hazard_for_vehicle
+        hazard_detected = self.detect_hazards_for_vehicle(self.vehicles[vehicle_index]) #MODIFIED switch to detect_hazard_for_vehicle
 
         # Update the anomaly flag based on hazard detection for the specific vehicle
         # You might want to maintain a dictionary of anomaly flags for each vehicle
-        self.anomaly_flags[vehicle_id] = hazard_detected
+        self.anomaly_flags[vehicle_index] = hazard_detected
 
     
 
@@ -258,6 +289,10 @@ class CarlaEnv:
         Args:
             vehicle (carla.Vehicle): The vehicle to retrieve information for.
         """
+
+        if not vehicle.is_alive:
+            raise RuntimeError("Vehicle is no longer valid in the simulation.")
+    
         location = vehicle.get_location()
         rotation = vehicle.get_transform().rotation
         velocity = vehicle.get_velocity()
@@ -269,7 +304,7 @@ class CarlaEnv:
             'velocity': (velocity.x, velocity.y, velocity.z),
             'acceleration': (acceleration.x, acceleration.y, acceleration.z)
         }
-        return vehicle_info
+        return vehicle_info # dict of size 4
 
     def get_vehicle_telemetry(self, vehicle):
         """
@@ -286,7 +321,7 @@ class CarlaEnv:
         acc = np.sqrt(acceleration.x**2 + acceleration.y**2 + acceleration.z**2)
 
         telemetry_data = np.array([speed, acc, wheel_angle])
-        return telemetry_data
+        return telemetry_data # size 3
 
     def get_environmental_conditions(self):
         # Placeholder for environmental conditions
@@ -300,7 +335,7 @@ class CarlaEnv:
 
         # Combine into a single array
         environmental_data = np.concatenate([weather_condition, time_data])
-        return environmental_data
+        return environmental_data # size 4 
     
 
     # environment interaction methods
@@ -363,11 +398,11 @@ class CarlaEnv:
     def reset(self):
         # Reset logic
         # Clean up existing vehicles and sensors before resetting
-        self.cleanup()
+        # self.cleanup()
 
         # Logic to reset and initialize the environment
         # Setup vehicles and sensors for the new episode
-        self.setup_vehicle_and_sensors(self.num_agents)
+        # self.setup_vehicle_and_sensors(self.num_agents)
         return self.get_state()
     
     def cleanup(self):
@@ -384,14 +419,16 @@ class CarlaEnv:
         # Clear the lists after destroying the objects
         self.vehicles.clear()
         self.camera_sensors.clear()
+        self.vehicle_id_to_index.clear()
 
     def process_sensor_data(self, vehicle):
+        vehicle_index = self.vehicle_id_to_index[vehicle.id]
         # Processing camera data # MODIFIED modify for multi agent
         camera_data = self.retrieve_camera_data(vehicle_id=vehicle.id) #MODIFIED need to modify for passing in specific vehicle, this might be unnecessary
         hazards_detected = self.detect_hazards_for_vehicle(vehicle=vehicle) #MODIFIED switch to detect_hazard_for_vehicle
 
         # Update the anomaly flag based on hazard detection
-        self.anomaly_flags[vehicle.id] = hazards_detected
+        self.anomaly_flags[vehicle_index] = hazards_detected
         self.current_sensor_state = {'camera': camera_data}
    
 
@@ -437,15 +474,15 @@ class CarlaEnv:
         Returns:
             bool: True if the episode is done, False otherwise.
         """
-        # # Time limit check
-        # if self.current_time >= self.max_time:
-        #     return True
-
-        # Hazard encounter check
+        # Check for any condition that should end the episode for all agents
         if all(self.anomaly_flags):
             return True
 
+        # Add other conditions here if necessary
+
         return False
+
+
 
 
 # Add additional methods as needed for retrieving data and conditions
