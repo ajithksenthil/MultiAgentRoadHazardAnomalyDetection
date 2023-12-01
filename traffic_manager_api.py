@@ -1,8 +1,9 @@
 import carla
 
 class TrafficManagerAPI:
-    def __init__(self, client, port=8000):
-        self.traffic_manager = client.get_trafficmanager(port)
+    def __init__(self, traffic_manager, world):
+        self.traffic_manager = traffic_manager
+        self.world = world  # Adding the world reference
         self.traffic_manager.set_global_distance_to_leading_vehicle(2.0)
         # Additional initial configurations can be added here
 
@@ -28,10 +29,8 @@ class TrafficManagerAPI:
         """ Sets the minimum distance to the leading vehicle. """
         self.traffic_manager.distance_to_leading_vehicle(actor, distance)
 
-    # Additional methods for other Traffic Manager functionalities
+    def set_desired_speed(self, vehicle, desired_speed):
+        self.traffic_manager.set_desired_speed(vehicle, desired_speed)
+    
 
-# Example usage
-# client = carla.Client('localhost', 2000)
-# traffic_manager_api = TrafficManagerAPI(client)
-# vehicle = ... # Assume this is a carla.Actor instance
-# traffic_manager_api.set_auto_lane_change(vehicle, True)
+    # Additional methods for other Traffic Manager functionalities

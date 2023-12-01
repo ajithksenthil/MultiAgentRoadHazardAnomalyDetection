@@ -13,6 +13,13 @@ class Actor(nn.Module):
         self.log_std_head = nn.Linear(hidden_dim, action_dim)
 
     def forward(self, state, hx):
+        # Debugging: Print the shape of state and hx
+        print(f"State shape: {state.shape}, HX shape: {hx.shape}")
+
+        # Reshape state if it is 3D (batch, sequence, features)
+        if state.dim() == 3:
+            state = state.view(-1, state.size(-1))
+
         x = F.relu(self.fc1(state))
         hx = self.gru(x, hx)  # Update hidden state
         x = F.relu(self.fc2(hx))
@@ -21,7 +28,21 @@ class Actor(nn.Module):
         log_std = torch.clamp(log_std, min=-20, max=2)  # Prevents numerical instability
         return mu, log_std, hx
 
+
     def sample(self, state, hx):
+        # Debugging: Print the shape of state and hx
+        print(f"State shape: {state.shape}, HX shape: {hx.shape}")
+
+        # Adjust hidden state batch size to match state's batch size
+        if state.dim() == 3:
+            # Reshape state to 2D (combine batch and sequence dimensions)
+            batch_size, sequence_length, features = state.size()
+            state = state.view(batch_size * sequence_length, features)
+
+            # Expand hx to match the new batch size
+            hx = hx.expand(batch_size * sequence_length, -1).contiguous()
+
+        # Forward pass to get mean, log std, and updated hidden state
         mu, log_std, hx = self.forward(state, hx)
         std = log_std.exp()
         dist = torch.distributions.Normal(mu, std)
@@ -29,6 +50,7 @@ class Actor(nn.Module):
         action = torch.tanh(z)  # Ensures action bounds
         log_prob = dist.log_prob(z) - torch.log(1 - action.pow(2) + 1e-6)
         return action, log_prob.sum(-1, keepdim=True), hx
+
 
 class Critic(nn.Module):
     def __init__(self, state_dim, action_dim, hidden_dim=256):
@@ -125,3 +147,4 @@ Activation Functions: ReLU is used here, but you can experiment with others like
 Normalization: Consider using batch normalization or layer normalization if you face issues with training stability.
 This setup establishes a basic framework for the actor and critic models in mSAC. You might need to adapt the architecture and parameters based on the specific requirements and challenges of your environment and tasks.
 '''
+
