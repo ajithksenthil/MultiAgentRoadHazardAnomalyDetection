@@ -7,7 +7,7 @@ from torch.utils.data import Dataset, DataLoader
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 from PIL import Image
 import numpy as np
-from models import MaxLogitAnomalyDetector
+
 import torchvision.models as models
 from torchvision.models import resnet18, ResNet18_Weights
 
@@ -87,11 +87,11 @@ if __name__ == "__main__":
 
     # Hyperparameters
     learning_rate = 0.001
-    num_epochs = 1 # change to 20
+    num_epochs = 1
     batch_size = 32
 
     # Initialize model, optimizer, and TensorBoard
-    model = MaxLogitAnomalyDetector().to(device)
+    model = ResNetBinaryClassifier().to(device)
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
 
 
@@ -114,22 +114,23 @@ if __name__ == "__main__":
 
     for epoch in range(num_epochs):
         model.train()
-        for batch_idx, (images, segmentation_masks, anomaly_masks) in enumerate(data_loader):
+        for batch_idx, (images, _, anomaly_masks) in enumerate(data_loader):
             images = images.to(device)
-            segmentation_masks = segmentation_masks.to(device)
+            targets = (anomaly_masks.sum(dim=[1, 2, 3]) > 0).float().to(device)  # Binary labels
 
             # Forward pass
             outputs = model(images).squeeze()
-            
-            # Compute maximum logit probability as anomaly score
-            anomaly_scores = torch.max(outputs, dim=-1)[1]
 
-            loss = max_logit_loss(outputs, segmentation_masks)
+
+            loss = binary_loss(outputs, targets)
 
             # Backward pass and optimization
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
+            # for name, param in model.named_parameters():
+            #     if param.requires_grad and param.grad is not None:
+            #         writer.add_histogram(f'{name}.grad', param.grad, epoch * len(data_loader) + batch_idx)
 
             print(f"Epoch: {epoch+1}, Batch: {batch_idx+1}, Loss: {loss.item()}")
 
@@ -139,26 +140,28 @@ if __name__ == "__main__":
         all_targets = []
         all_predictions = []
         with torch.no_grad():
-            for images, segmentation_masks, anomaly_masks in val_loader:
+            for images, _, anomaly_masks in val_loader:
                 images = images.to(device)
-                segmentation_masks = segmentation_masks.to(device)
+                targets = (anomaly_masks.sum(dim=[1, 2, 3]) > 0).float().to(device)
                 outputs = model(images).squeeze()
-                
        
-                loss = max_logit_loss(outputs, segmentation_masks)
+                loss = binary_loss(outputs, targets)
 
                 val_loss += loss.item()
                 predictions = torch.sigmoid(outputs).round().squeeze().cpu().numpy()
                 all_predictions.extend(predictions)
-                # all_targets.extend(segmentation_masks.cpu().numpy())
+                all_targets.extend(targets.cpu().numpy())
 
         # Calculate metrics
         val_loss /= len(val_loader)
+        accuracy = accuracy_score(all_targets, all_predictions)
+        precision = precision_score(all_targets, all_predictions, average='binary')
+        recall = recall_score(all_targets, all_predictions, average='binary')
+        f1 = f1_score(all_targets, all_predictions, average='binary')
 
 
 
-
-        print(f"Epoch: {epoch+1} - Val Loss: {val_loss:.4f}")
+        print(f"Epoch: {epoch+1} - Val Loss: {val_loss:.4f}, Accuracy: {accuracy:.4f}, Precision: {precision:.4f}, Recall: {recall:.4f}, F1: {f1:.4f}")
 
 
 
