@@ -14,7 +14,7 @@ class Actor(nn.Module):
 
     def forward(self, state, hx):
         # Debugging: Print the shape of state and hx
-        print(f"State shape: {state.shape}, HX shape: {hx.shape}")
+        # print(f"State shape: {state.shape}, HX shape: {hx.shape}")
 
         # Reshape state if it is 3D (batch, sequence, features)
         if state.dim() == 3:
@@ -31,17 +31,11 @@ class Actor(nn.Module):
 
     def sample(self, state, hx):
         # Debugging: Print the shape of state and hx
-        print(f"State shape: {state.shape}, HX shape: {hx.shape}")
-
-        # Adjust hidden state batch size to match state's batch size
-        if state.dim() == 3:
-            # Reshape state to 2D (combine batch and sequence dimensions)
-            batch_size, sequence_length, features = state.size()
-            state = state.view(batch_size * sequence_length, features)
-
-            # Expand hx to match the new batch size
-            hx = hx.expand(batch_size * sequence_length, -1).contiguous()
-
+        # print(f"State shape: {state.shape}, HX shape: {hx.shape}")
+        batch_size = state.size(0)  # Get the batch size from the state tensor
+        if hx.size(0) != batch_size:
+            hx = hx.expand(batch_size, -1).contiguous()  # Adjust hx to match the batch size
+        
         # Forward pass to get mean, log std, and updated hidden state
         mu, log_std, hx = self.forward(state, hx)
         std = log_std.exp()
@@ -61,6 +55,8 @@ class Critic(nn.Module):
         self.q_head = nn.Linear(hidden_dim, 1)
 
     def forward(self, state, action, hx):
+        batch_size = state.size(0)  # Get the batch size from the state tensor
+        hx = hx.expand(batch_size, -1).contiguous()  # Adjust hx to match the batch size
         x = torch.cat([state, action], dim=1)
         x = F.relu(self.fc1(x))
         hx = self.gru(x, hx)  # Update hidden state
@@ -98,7 +94,18 @@ class MixingNetwork(nn.Module):
 
     def forward(self, states, local_qs):
         w1, w2 = self.hyper_net(states)
-        # Apply the mixing network weights
+        
+        # Debugging: Print the shapes of tensors
+        print(f"w1 Shape: {w1.shape}, w2 Shape: {w2.shape}, local_qs Shape: {local_qs.shape}")
+
+        # Ensure that local_qs is 2D (batch, num_agents) if necessary
+        if local_qs.dim() == 3:
+            local_qs = local_qs.view(local_qs.size(0), -1)
+
+        # Ensure w1 is correctly broadcastable with local_qs
+        if w1.dim() != local_qs.dim():
+            w1 = w1.unsqueeze(-1)
+
         mixed_qs = torch.einsum('bq,bq->b', w1, local_qs) + w2.sum(dim=1, keepdim=True)
         return mixed_qs
 

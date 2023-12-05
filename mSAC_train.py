@@ -4,13 +4,18 @@ import torch
 from mSAC_agent import Agent
 from replay_buffer import ReplayBuffer
 
+# Set default CUDA device
+if torch.cuda.is_available():
+    torch.cuda.set_device(1)  # Set default device in case of multiple GPUs
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 def train_mSAC(env, num_agents, max_episodes, max_timesteps, batch_size):
 
     # reduce batch size TODO see if this works
     batch_size = batch_size 
 
     # Initialize agents and their optimizers
-    agents = [Agent(state_dim=env.state_size, action_dim=env.action_size, num_agents=num_agents,
+    agents = [Agent(state_dim=env.state_size, action_dim=env.action_size, num_agents=num_agents, batch_size = batch_size,
                     hidden_dim=256) for _ in range(num_agents)]
 
     # Initialize replay buffer
@@ -64,6 +69,7 @@ def train_mSAC(env, num_agents, max_episodes, max_timesteps, batch_size):
                 action, _ = agent.select_action(states[i], i)  # Corrected call to select_action, no more ego vehicle
                 actions.append(action)
 
+            # print(f"mSAC_train.py:Training loop: First action element: {actions[0]}, Type: {type(actions[0])}")
             next_states, rewards, done, _ = env.step(actions)
             replay_buffer.push(states, actions, rewards, next_states, [done] * num_agents)
 
@@ -94,3 +100,5 @@ def train_mSAC(env, num_agents, max_episodes, max_timesteps, batch_size):
     print("returning agents")
 
     return agents
+
+
