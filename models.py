@@ -18,82 +18,92 @@ class FeatureExtractor(nn.Module):
         return image_features
 
 
-# class PolicyNetwork(nn.Module):
-#     """
-#     Neural network to represent the stochastic selection policy.
-#     """
-#     def __init__(self, input_dim, hidden_dim, output_dim):
-#         super(PolicyNetwork, self).__init__()
-#         self.fc1 = nn.Linear(input_dim, hidden_dim)
-#         self.fc2 = nn.Linear(hidden_dim, output_dim)
-#         self.softmax = nn.Softmax(dim=1)
-    
-#     def forward(self, x):
-#         x = torch.relu(self.fc1(x))
-#         x = self.softmax(self.fc2(x))
-#         return x
-
-
 class PolicyNetwork(nn.Module):
-    def __init__(self, input_dim, hidden_dim, output_dim):
+    def __init__(self, input_dim, hidden_dim, output_dim, dropout_rate=0.5):
         super(PolicyNetwork, self).__init__()
         self.fc1 = nn.Linear(input_dim, hidden_dim)
         self.bn1 = nn.BatchNorm1d(hidden_dim)
+        self.dropout1 = nn.Dropout(dropout_rate)
         self.fc2 = nn.Linear(hidden_dim, hidden_dim)
         self.bn2 = nn.BatchNorm1d(hidden_dim)
+        self.dropout2 = nn.Dropout(dropout_rate)
         self.fc3 = nn.Linear(hidden_dim, output_dim)
         self.softmax = nn.Softmax(dim=1)
 
     def forward(self, x):
         x = torch.relu(self.bn1(self.fc1(x)))
+        x = self.dropout1(x)
         x = torch.relu(self.bn2(self.fc2(x)))
+        x = self.dropout2(x)
         x = self.softmax(self.fc3(x))
         return x
 
-# class BootstrappedEFENetwork(nn.Module):
-#     """
-#     Neural network to represent the bootstrapped Expected Free Energy (EFE).
-#     """
-#     def __init__(self, input_dim, hidden_dim):
-#         super(BootstrappedEFENetwork, self).__init__()
-#         self.fc1 = nn.Linear(input_dim, hidden_dim)
-#         self.fc2 = nn.Linear(hidden_dim, 1) # Outputs a single scalar representing EFE
-    
-#     def forward(self, x):
-#         x = torch.relu(self.fc1(x))
-#         x = self.fc2(x)
-#         return x
+
+
 
 class BootstrappedEFENetwork(nn.Module):
-    def __init__(self, input_dim, hidden_dim):
+    def __init__(self, input_dim, hidden_dim, dropout_rate=0.5):
         super(BootstrappedEFENetwork, self).__init__()
         self.fc1 = nn.Linear(input_dim, hidden_dim)
         self.bn1 = nn.BatchNorm1d(hidden_dim)
+        self.dropout1 = nn.Dropout(dropout_rate)
         self.fc2 = nn.Linear(hidden_dim, hidden_dim)
         self.bn2 = nn.BatchNorm1d(hidden_dim)
+        self.dropout2 = nn.Dropout(dropout_rate)
         self.fc3 = nn.Linear(hidden_dim, 1)
 
     def forward(self, x):
         x = torch.relu(self.bn1(self.fc1(x)))
+        x = self.dropout1(x)
         x = torch.relu(self.bn2(self.fc2(x)))
+        x = self.dropout2(x)
         x = self.fc3(x)
         return x
 
+
 class BeliefUpdateNetwork(nn.Module):
-    def __init__(self, input_dim, hidden_dim, output_dim):
+    def __init__(self, input_dim, hidden_dim, output_dim, dropout_rate=0.5):
         super(BeliefUpdateNetwork, self).__init__()
         self.fc1 = nn.Linear(input_dim, hidden_dim)
         self.bn1 = nn.BatchNorm1d(hidden_dim)
+        self.dropout1 = nn.Dropout(dropout_rate)
         self.fc2 = nn.Linear(hidden_dim, hidden_dim)
         self.bn2 = nn.BatchNorm1d(hidden_dim)
+        self.dropout2 = nn.Dropout(dropout_rate)
         self.fc3 = nn.Linear(hidden_dim, output_dim)
         self.softmax = nn.Softmax(dim=1)
 
     def forward(self, x):
         x = torch.relu(self.bn1(self.fc1(x)))
+        x = self.dropout1(x)
         x = torch.relu(self.bn2(self.fc2(x)))
+        x = self.dropout2(x)
         x = self.softmax(self.fc3(x))
         return x
+
+
+
+class MaxLogitAnomalyDetector(nn.Module):
+    def __init__(self, pretrained=True):
+        super(MaxLogitAnomalyDetector, self).__init__()
+        # Load a pre-trained ResNet
+        self.resnet = models.resnet18(weights=models.ResNet18_Weights.IMAGENET1K_V1)
+
+        # Remove the last fully connected layer
+        self.features = nn.Sequential(*list(self.resnet.children())[:-1])
+
+        # Add a softmax layer for multi-class classification
+        self.classifier = nn.Linear(self.resnet.fc.in_features, 13)  # 13 classes for StreetHazards
+
+    def forward(self, x):
+        # Feature extraction
+        x = self.features(x)
+        x = x.view(x.size(0), -1)  # Flatten the features
+
+        # Classification
+        outputs = self.classifier(x)
+
+        return outputs
 
 
 

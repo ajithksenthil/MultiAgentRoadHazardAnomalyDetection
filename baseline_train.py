@@ -5,6 +5,10 @@ import torch.optim as optim
 from torchvision import transforms, models
 from torch.utils.data import Dataset, DataLoader
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+from sklearn.metrics import average_precision_score, jaccard_score
+from sklearn.metrics import precision_recall_curve, auc
+from sklearn.preprocessing import label_binarize
+from sklearn.metrics import average_precision_score
 from PIL import Image
 import numpy as np
 from models import MaxLogitAnomalyDetector
@@ -21,7 +25,34 @@ class StreetHazardsDataset(Dataset):
     def __len__(self):
         return len(self.image_files)
     
+    def __getitem__(self, idx):
+        image_path = os.path.join(self.image_dir, self.image_files[idx])
+        annotation_path = os.path.join(self.annotation_dir, self.image_files[idx])
+        
+        image = Image.open(image_path).convert('RGB')
+        annotation = Image.open(annotation_path)
+        segmentation_mask = np.array(annotation, dtype=np.int64)  # Load full segmentation mask
 
+        # Map the anomaly class from 13 to 12
+        segmentation_mask[segmentation_mask == 13] = 12
+
+        anomaly_mask = (segmentation_mask == 12)  # Update anomaly mask
+
+        if self.transform:
+            image = self.transform(image)
+            segmentation_mask_uint8 = segmentation_mask.astype(np.uint8)
+            segmentation_mask_pil = Image.fromarray(segmentation_mask_uint8)
+            segmentation_mask_pil = segmentation_mask_pil.resize((224, 224), Image.NEAREST)
+            segmentation_mask = torch.tensor(np.array(segmentation_mask_pil), dtype=torch.long)
+
+            anomaly_mask_pil = Image.fromarray(anomaly_mask.astype(np.uint8) * 255)
+            anomaly_mask_pil = anomaly_mask_pil.resize((224, 224), Image.NEAREST)
+            anomaly_mask = torch.tensor(np.array(anomaly_mask_pil), dtype=torch.float32).unsqueeze(0) / 255
+
+        return image, segmentation_mask, anomaly_mask
+
+    
+    """ 
     def __getitem__(self, idx):
         image_path = os.path.join(self.image_dir, self.image_files[idx])
         annotation_path = os.path.join(self.annotation_dir, self.image_files[idx])
@@ -45,50 +76,62 @@ class StreetHazardsDataset(Dataset):
             anomaly_mask = torch.tensor(np.array(anomaly_mask_pil), dtype=torch.float32).unsqueeze(0) / 255
 
         return image, segmentation_mask, anomaly_mask
+    """
 
-
-class ResNetBinaryClassifier(nn.Module):
-    def __init__(self, pretrained=True, dropout_rate=0.5, hidden_dim=256):
-        super(ResNetBinaryClassifier, self).__init__()
+class MaxLogitAnomalyDetector(nn.Module):
+    def __init__(self, pretrained=True):
+        super(MaxLogitAnomalyDetector, self).__init__()
         # Load a pre-trained ResNet
         self.resnet = models.resnet18(weights=models.ResNet18_Weights.IMAGENET1K_V1)
+        self.features = nn.Sequential(*list(self.resnet.children())[:-2]) # retain up to the last convolutional layer
 
-        # Remove the last fully connected layer
-        self.features = nn.Sequential(*list(self.resnet.children())[:-1])
-
-        # Define the fully connected layers for binary classification
-        num_features = self.resnet.fc.in_features
-        self.fc1 = nn.Linear(num_features, hidden_dim)
-        self.dropout = nn.Dropout(p=dropout_rate)
-        self.fc2 = nn.Linear(hidden_dim, 1)
+        # Upsample and classifier layers
+        self.upsample = nn.Upsample(scale_factor=32, mode='bilinear', align_corners=True)
+        self.classifier = nn.Conv2d(512, 13, 1)  # 13 classes for StreetHazards
 
     def forward(self, x):
         # Feature extraction
         x = self.features(x)
-        x = x.view(x.size(0), -1)  # Flatten the features
+        
+        # Upsample to input size and classify
+        x = self.upsample(x)
+        outputs = self.classifier(x)
 
-        # Fully connected layers
-        x = self.fc1(x)
-        x = self.dropout(x)
-        x = self.fc2(x)
-
-        return x
+        return outputs
 
 
-# Binary Cross-Entropy Loss
-def binary_loss(output, target):
-    return nn.functional.binary_cross_entropy_with_logits(output, target)
 
+# max logit loss
 def max_logit_loss(output, target):
     return nn.functional.cross_entropy(output, target)
+
+def compute_iou(preds, labels, num_classes=13):
+    iou_list = []
+    preds = preds.flatten()  # Flatten the array if not already
+    labels = labels.flatten()  # Flatten the array if not already
+
+    for cls in range(num_classes):
+        pred_inds = preds == cls
+        target_inds = labels == cls
+        intersection = np.logical_and(pred_inds, target_inds).sum()
+        union = np.logical_or(pred_inds, target_inds).sum()
+
+        if union == 0:
+            iou_list.append(float('nan'))  # Exclude classes not present in ground truth
+        else:
+            iou_list.append(intersection / union)
+
+    return np.nanmean(iou_list)
+
 
 if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Hyperparameters
     learning_rate = 0.001
-    num_epochs = 1 # change to 20
+    num_epochs = 15 # change to 20
     batch_size = 32
+    num_classes = 13
 
     # Initialize model, optimizer, and TensorBoard
     model = MaxLogitAnomalyDetector().to(device)
@@ -114,52 +157,70 @@ if __name__ == "__main__":
 
     for epoch in range(num_epochs):
         model.train()
-        for batch_idx, (images, segmentation_masks, anomaly_masks) in enumerate(data_loader):
-            images = images.to(device)
-            segmentation_masks = segmentation_masks.to(device)
+        train_loss = 0
+        for batch_idx, (images, segmentation_masks, _) in enumerate(data_loader):
+            images, segmentation_masks = images.to(device), segmentation_masks.to(device)
 
             # Forward pass
-            outputs = model(images).squeeze()
-            
-            # Compute maximum logit probability as anomaly score
-            anomaly_scores = torch.max(outputs, dim=-1)[1]
+            outputs = model(images)
 
+            # Compute loss
             loss = max_logit_loss(outputs, segmentation_masks)
 
-            # Backward pass and optimization
+            # Backward and optimize
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
+            train_loss += loss.item()
 
-            print(f"Epoch: {epoch+1}, Batch: {batch_idx+1}, Loss: {loss.item()}")
+            # print(f"Epoch: {epoch+1}, Batch: {batch_idx+1}, Loss: {loss.item()}")
+        avg_train_loss = train_loss / len(data_loader)
+        print(f"Epoch [{epoch+1}/{num_epochs}], Loss: {avg_train_loss:.4f}")
 
         # Validation Loop
         model.eval()
         val_loss = 0.0
-        all_targets = []
+        ious, pixel_accuracies, precision_list, recall_list = [], [], [], []
+        all_labels = []
         all_predictions = []
         with torch.no_grad():
-            for images, segmentation_masks, anomaly_masks in val_loader:
-                images = images.to(device)
-                segmentation_masks = segmentation_masks.to(device)
-                outputs = model(images).squeeze()
-                
-       
-                loss = max_logit_loss(outputs, segmentation_masks)
+            for images, segmentation_masks, _ in val_loader:
+                images, segmentation_masks = images.to(device), segmentation_masks.to(device)
+                outputs = model(images)
 
-                val_loss += loss.item()
-                predictions = torch.sigmoid(outputs).round().squeeze().cpu().numpy()
-                all_predictions.extend(predictions)
-                # all_targets.extend(segmentation_masks.cpu().numpy())
+                val_loss += max_logit_loss(outputs, segmentation_masks).item()
 
-        # Calculate metrics
-        val_loss /= len(val_loader)
+                preds = torch.argmax(outputs, dim=1).view(-1).cpu().numpy()
+                masks_np = segmentation_masks.cpu().numpy()
 
+                # Flatten arrays for metric calculations
+                preds_flat = preds.flatten()
+                masks_flat = masks_np.flatten()
 
+                # Pixel Accuracy
+                pixel_accuracies.append(np.mean(preds_flat == masks_flat))
 
+                # Mean IoU
+                ious.append(compute_iou(preds, masks_np, num_classes=13))
 
-        print(f"Epoch: {epoch+1} - Val Loss: {val_loss:.4f}")
+                # Prepare for AUPR calculation (focusing on the anomaly class)
+                anomaly_class_idx = 12  # Assuming anomaly class is indexed at 12
+                anomaly_preds = (preds_flat == anomaly_class_idx)
+                anomaly_truth = (masks_flat == anomaly_class_idx)
 
+                precision, recall, _ = precision_recall_curve(anomaly_truth, anomaly_preds)
+                precision_list.append(precision)
+                recall_list.append(recall)
+             
 
+        # Average the metrics over the validation set
+        avg_val_loss = val_loss / len(val_loader)
+        avg_iou = np.nanmean(ious)
+        avg_pixel_accuracy = np.mean(pixel_accuracies)
+
+        # AUPR calculation (average AUPR if there are multiple batches)
+        avg_aupr = np.mean([auc(recall_list[i], precision_list[i]) for i in range(len(precision_list))])
+
+        print(f"Epoch: {epoch+1} - Val Loss: {avg_val_loss:.4f}, Pixel Accuracy: {avg_pixel_accuracy:.4f}, mIoU: {avg_iou:.4f}, AUPR: {avg_aupr:.4f}")
 
     print("Training and validation completed.")
