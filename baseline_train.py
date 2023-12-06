@@ -9,11 +9,16 @@ from sklearn.metrics import average_precision_score, jaccard_score
 from sklearn.metrics import precision_recall_curve, auc
 from sklearn.preprocessing import label_binarize
 from sklearn.metrics import average_precision_score
+from sklearn.metrics import roc_auc_score
+from sklearn.metrics import roc_curve
 from PIL import Image
 import numpy as np
 from models import MaxLogitAnomalyDetector
 import torchvision.models as models
 from torchvision.models import resnet18, ResNet18_Weights
+import segmentation_models_pytorch as smp
+
+
 
 class StreetHazardsDataset(Dataset):
     def __init__(self, image_dir, annotation_dir, transform=None):
@@ -42,41 +47,17 @@ class StreetHazardsDataset(Dataset):
             image = self.transform(image)
             segmentation_mask_uint8 = segmentation_mask.astype(np.uint8)
             segmentation_mask_pil = Image.fromarray(segmentation_mask_uint8)
-            segmentation_mask_pil = segmentation_mask_pil.resize((224, 224), Image.NEAREST)
+
+            # Resize both image and segmentation mask to 512x512
+            segmentation_mask_pil = segmentation_mask_pil.resize((512, 512), Image.NEAREST)
             segmentation_mask = torch.tensor(np.array(segmentation_mask_pil), dtype=torch.long)
 
             anomaly_mask_pil = Image.fromarray(anomaly_mask.astype(np.uint8) * 255)
-            anomaly_mask_pil = anomaly_mask_pil.resize((224, 224), Image.NEAREST)
+            anomaly_mask_pil = anomaly_mask_pil.resize((512, 512), Image.NEAREST)
             anomaly_mask = torch.tensor(np.array(anomaly_mask_pil), dtype=torch.float32).unsqueeze(0) / 255
 
         return image, segmentation_mask, anomaly_mask
 
-    
-    """ 
-    def __getitem__(self, idx):
-        image_path = os.path.join(self.image_dir, self.image_files[idx])
-        annotation_path = os.path.join(self.annotation_dir, self.image_files[idx])
-        
-        image = Image.open(image_path).convert('RGB')
-        annotation = Image.open(annotation_path)
-        segmentation_mask = np.array(annotation, dtype=np.int64)  # Load full segmentation mask
-        anomaly_mask = (segmentation_mask == 13)  # Anomalies are labeled with 13 in annotations
-        
-        if self.transform:
-            image = self.transform(image)
-            # Convert segmentation_mask to uint8 for PIL processing
-            segmentation_mask_uint8 = segmentation_mask.astype(np.uint8)
-            segmentation_mask_pil = Image.fromarray(segmentation_mask_uint8)
-            segmentation_mask_pil = segmentation_mask_pil.resize((224, 224), Image.NEAREST)  # Use nearest neighbor to avoid interpolation artifacts
-            segmentation_mask = torch.tensor(np.array(segmentation_mask_pil), dtype=torch.long)  # Convert back to tensor
-
-            # Resize anomaly_mask as a PIL image to maintain consistency
-            anomaly_mask_pil = Image.fromarray(anomaly_mask.astype(np.uint8) * 255)
-            anomaly_mask_pil = anomaly_mask_pil.resize((224, 224), Image.NEAREST)
-            anomaly_mask = torch.tensor(np.array(anomaly_mask_pil), dtype=torch.float32).unsqueeze(0) / 255
-
-        return image, segmentation_mask, anomaly_mask
-    """
 
 class MaxLogitAnomalyDetector(nn.Module):
     def __init__(self, pretrained=True):
@@ -98,6 +79,33 @@ class MaxLogitAnomalyDetector(nn.Module):
         outputs = self.classifier(x)
 
         return outputs
+
+
+
+class PSPNetResNet101(nn.Module):
+    def __init__(self, dropout_rate=0.5):
+        super(PSPNetResNet101, self).__init__()
+        self.model = smp.PSPNet(
+            encoder_name="resnet101", 
+            encoder_weights="imagenet", 
+            classes=13, 
+            activation=None
+        )
+        self.dropout = nn.Dropout(dropout_rate)
+
+    def forward(self, x):
+        # Extract features using the encoder
+        features = self.model.encoder(x)
+
+        # Apply dropout to the highest resolution features only
+        if len(features) > 0 and isinstance(features[-1], torch.Tensor):
+            features[-1] = self.dropout(features[-1])
+
+        # Decode features and get logits
+        x = self.model.decoder(*features)
+        logits = self.model.segmentation_head(x)
+        return logits
+
 
 
 
@@ -129,20 +137,25 @@ if __name__ == "__main__":
 
     # Hyperparameters
     learning_rate = 0.001
-    num_epochs = 15 # change to 20
-    batch_size = 32
+    num_epochs = 20 # change to 20
+    batch_size = 16 # changed from 32
     num_classes = 13
+    lr_scheduler = None # TODO implement this when you get the chance
 
     # Initialize model, optimizer, and TensorBoard
-    model = MaxLogitAnomalyDetector().to(device)
-    optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+    # model = MaxLogitAnomalyDetector().to(device)
+    model = PSPNetResNet101().to(device)
+    model = nn.DataParallel(model)  # Wrap model for parallel processing
+    # optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+    optimizer = optim.SGD(model.parameters(), lr=2e-2, momentum=0.9, weight_decay=1e-4)
 
 
     # Dataset and DataLoader
     image_dir = 'train/images/training/t1-3'
     annotation_dir = 'train/annotations/training/t1-3'
+    # using larger transformation size because it is a segmentation task
     transform = transforms.Compose([
-        transforms.Resize((224, 224)),
+        transforms.Resize((512, 512)),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
     ])
@@ -208,7 +221,13 @@ if __name__ == "__main__":
                 anomaly_preds = (preds_flat == anomaly_class_idx)
                 anomaly_truth = (masks_flat == anomaly_class_idx)
 
+                fpr, tpr, thresholds = roc_curve(anomaly_truth, anomaly_preds)
+                fpr95 = fpr[np.where(tpr >= 0.95)[0][0]] * 100  # Multiplied by 100 to convert to percentage
+
+                auroc = roc_auc_score(anomaly_truth, anomaly_preds) * 100  # As a percentage
+
                 precision, recall, _ = precision_recall_curve(anomaly_truth, anomaly_preds)
+                aupr = auc(recall, precision) * 100  # As a percentage
                 precision_list.append(precision)
                 recall_list.append(recall)
              
@@ -218,9 +237,12 @@ if __name__ == "__main__":
         avg_iou = np.nanmean(ious)
         avg_pixel_accuracy = np.mean(pixel_accuracies)
 
+        
         # AUPR calculation (average AUPR if there are multiple batches)
         avg_aupr = np.mean([auc(recall_list[i], precision_list[i]) for i in range(len(precision_list))])
 
         print(f"Epoch: {epoch+1} - Val Loss: {avg_val_loss:.4f}, Pixel Accuracy: {avg_pixel_accuracy:.4f}, mIoU: {avg_iou:.4f}, AUPR: {avg_aupr:.4f}")
+        print(f"Epoch: {epoch+1} - Val Loss: {avg_val_loss:.4f}, FPR95: {fpr95:.2f}%, AUROC: {auroc:.2f}%, AUPR: {aupr:.2f}%")
+
 
     print("Training and validation completed.")
