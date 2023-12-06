@@ -34,7 +34,7 @@ class Actor(nn.Module):
         # print(f"State shape: {state.shape}, HX shape: {hx.shape}")
         batch_size = state.size(0)  # Get the batch size from the state tensor
         if hx.size(0) != batch_size:
-            hx = hx.expand(batch_size, -1).contiguous()  # Adjust hx to match the batch size
+            hx = hx.expand(batch_size, -1).contiguous().clone()  # Adjust hx to match the batch size
         
         # Forward pass to get mean, log std, and updated hidden state
         mu, log_std, hx = self.forward(state, hx)
@@ -56,20 +56,15 @@ class Critic(nn.Module):
 
     def forward(self, state, action, hx):
         batch_size = state.size(0)  # Get the batch size from the state tensor
-        # print("batch_size", batch_size)
+
         # hx = hx.expand(batch_size, -1).contiguous()  # Adjust hx to match the batch size
-        hx = hx.clone().expand(batch_size, -1).contiguous()
-        # print("hx", hx)
+        hx = hx.expand(batch_size, -1).contiguous().clone()
         x = torch.cat([state, action], dim=1)
-        # print("x before relu", x)
         x = F.relu(self.fc1(x))
-        # print("x after relu", x)
         hx = self.gru(x, hx)  # Update hidden state
-        # print("hx after gru", hx)
         x = F.relu(self.fc2(hx))
-        # print("final x after relu and gru with hidden", x)
         q_value = self.q_head(x)
-        # print("q value", q_value)
+
         return q_value, hx
 
 class HyperNetwork(nn.Module):

@@ -30,7 +30,7 @@ class Agent:
 
         self.tau = tau
         self.gamma = gamma
-        self.alpha = alpha
+        self.alpha = alpha # TODO implement more robust entropy calculation later
         self.num_agents = num_agents
         self.actor_hxs = [torch.zeros(batch_size, hidden_dim).to(device) for _ in range(num_agents)] # changing to batch size
         self.critic_hxs = [torch.zeros(batch_size, hidden_dim).to(device) for _ in range(num_agents)]
@@ -109,14 +109,23 @@ class Agent:
             target_total_Q = rewards + self.gamma * (1 - dones) * target_total_Q
 
         # Critic loss
+        # TODO add debugging steps and print statements
+        
+        print("before loss calc: total_Q version and target_total_Q version: ", total_Q._version, target_total_Q._version)
         critic_loss = torch.nn.functional.mse_loss(total_Q, target_total_Q)
+        print("after loss calc: total_Q version and target_total_Q version: ", total_Q._version, target_total_Q._version)
         self.critic_optimizers[agent_idx].zero_grad()
+        print("after loss calc and optimizers zero grad: total_Q version and target_total_Q version: ", total_Q._version, target_total_Q._version)
         critic_loss.backward()
+        print("after loss backwards: total_Q version and target_total_Q version: ", total_Q._version, target_total_Q._version)
         self.critic_optimizers[agent_idx].step()
+        print("after optimizers step: total_Q version and target_total_Q version: ", total_Q._version, target_total_Q._version)
 
         # Actor loss
+        print("log_probs and newQ vals versions:", log_probs._version, new_Q_values._version)
         actor_loss = -(self.alpha * log_probs + new_Q_values).mean()
         self.actor_optimizers[agent_idx].zero_grad()
+        print("after loss calc: log_probs and newQ vals versions:", log_probs._version, new_Q_values._version)
         actor_loss.backward()
         self.actor_optimizers[agent_idx].step()
 
