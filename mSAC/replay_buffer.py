@@ -1,6 +1,11 @@
 # replay_buffer.py
 import random
 import numpy as np
+import torch
+# Set default CUDA device
+if torch.cuda.is_available():
+    torch.cuda.set_device(1)  # Set default device in case of multiple GPUs
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class ReplayBuffer:
     def __init__(self, capacity, num_agents):
@@ -12,20 +17,34 @@ class ReplayBuffer:
     def push(self, states, actions, rewards, next_states, dones):
         # states, actions, rewards, next_states, and dones are expected to be lists of lists
         # where each inner list corresponds to an agent's experiences
+        flattened_actions = [np.concatenate([
+                             np.array(list(action['vehicle_control'].values())),
+                             np.array(list(action['traffic_manager_control'].values()))
+                         ]) for action in actions]
         for i in range(self.num_agents):
             if len(self.buffers[i]) < self.capacity:
                 self.buffers[i].append(None)
-            self.buffers[i][self.positions[i]] = (states[i], actions[i], rewards[i], next_states[i], dones[i])
+            self.buffers[i][self.positions[i]] = (states[i], flattened_actions[i], rewards[i], next_states[i], dones[i])
             self.positions[i] = (self.positions[i] + 1) % self.capacity
 
-    def sample(self, batch_size):
-        # Randomly sample a batch of transitions for each agent from their respective buffers
-        batches = []
-        for i in range(self.num_agents):
-            batch = random.sample(self.buffers[i], batch_size)
-            state, action, reward, next_state, done = map(np.stack, zip(*batch))
-            batches.append((state, action, reward, next_state, done))
-        return batches
+    def sample(self, batch_size, agent_index):
+        # Sample a batch of transitions for the specified agent
+        if len(self.buffers[agent_index]) < batch_size:
+            raise ValueError(f"Not enough samples in buffer for agent {agent_index}")
+
+        batch = random.sample(self.buffers[agent_index], batch_size)
+        state, action, reward, next_state, done = map(np.stack, zip(*batch))
+
+        # Print statements for debugging
+        print(f"Agent {agent_index} sample types and shapes:")
+        print(f"State: {type(state)}, Shape: {state.shape}")
+        print(f"Action: {type(action)}, Shape: {action.shape}")
+        print(f"Reward: {type(reward)}, Shape: {reward.shape}")
+        print(f"Next State: {type(next_state)}, Shape: {next_state.shape}")
+        print(f"Done: {type(done)}, Shape: {done.shape}")
+
+        return (state, action, reward, next_state, done)
+
 
     def __len__(self):
         return min(len(buffer) for buffer in self.buffers)

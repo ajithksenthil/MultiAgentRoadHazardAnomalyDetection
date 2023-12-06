@@ -63,11 +63,11 @@ class CarlaEnv:
         # Vehicle info
         vehicle_info_size = 12  # location (3) + rotation (3) + velocity (3) + acceleration (3)
 
-        # Total state size #TODO change for the fact we have multiple agents
+        # Total state size #TODO change for the fact we have multiple agents, not sure
         total_state_size = additional_data_size + vehicle_info_size
 
         self.state_size = int(total_state_size)
-        self.action_size = 5  # Define the size of the action (3 for vehicle control and 2 for traffic manager control) #TODO change for multiple agents
+        self.action_size = 5  # Define the size of the action (3 for vehicle control and 2 for traffic manager control) #TODO change for multiple agents, not sure
 
         
 
@@ -75,6 +75,8 @@ class CarlaEnv:
     def setup_vehicle_and_sensors(self, num_agents):
         self.vehicles = []
         self.camera_sensors = []
+        self.collision_sensors = {}  # Store collision sensors for each vehicle
+        self.collision_counts = {}  # Track collisions for each vehicle
         self.vehicle_id_to_index = {}  # Mapping from vehicle ID to index in self.vehicles
 
         # Vehicle setup
@@ -94,6 +96,7 @@ class CarlaEnv:
 
             self.vehicles.append(vehicle)
             self.vehicle_id_to_index[vehicle.id] = len(self.vehicles) - 1  # Map vehicle id to its index
+            self.collision_counts[vehicle.id] = 0  # Initialize collision count for this vehicle
 
             # Sensor setup for each vehicle
             camera_bp = blueprint_library.find('sensor.camera.rgb')
@@ -103,7 +106,18 @@ class CarlaEnv:
             camera_sensor.listen(lambda image_data, vid=vehicle.id: self.camera_callback(image_data, vid))
             self.camera_sensors.append(camera_sensor)
 
+            # Attach collision sensor
+            self.attach_collision_sensor(vehicle)
 
+    def attach_collision_sensor(self, vehicle):
+        collision_sensor_bp = self.world.get_blueprint_library().find('sensor.other.collision')
+        collision_sensor = self.world.spawn_actor(collision_sensor_bp, carla.Transform(), attach_to=vehicle)
+        collision_sensor.listen(lambda event: self.on_collision(event, vehicle.id))
+        self.collision_sensors[vehicle.id] = collision_sensor
+
+    def on_collision(self, event, vehicle_id):
+        # Increment the collision counter for this vehicle
+        self.collision_counts[vehicle_id] += 1
 
     def get_state(self):
 
@@ -126,6 +140,7 @@ class CarlaEnv:
             states.append(state)  # Append the state of this vehicle to the states list
 
         return states
+    
     
     def step(self, actions):
         """
@@ -163,7 +178,7 @@ class CarlaEnv:
             anomaly_detected_flags.append(anomaly_detected)
 
             # Calculate reward for this vehicle
-            reward = self.calculate_reward(vehicle, anomaly_detected, action)
+            reward = self.calculate_reward(vehicle)
             rewards.append(reward)
 
         # Check if the episode is done
@@ -172,32 +187,49 @@ class CarlaEnv:
         # Get the next state for all vehicles
         next_states = self.get_state()
 
-        info = {"anomaly": anomaly_detected_flags}
+        # Gather info for data visualization
+        collisions = self.get_collisions()
+        hazard_encounters = self.get_hazard_encounters()
+        info = {
+            "anomaly": anomaly_detected_flags,
+            "collisions": collisions,
+            "hazard_encounters": hazard_encounters
+        }
 
         return next_states, rewards, done, info
 
-    def calculate_reward(self, vehicle, anomaly_detected, action):
+    
+
+    def get_hazard_encounters(self):
+        # Count how many vehicles encountered a hazard
+        hazard_encounters = sum(1 for flag in self.anomaly_flags if flag)
+        return hazard_encounters
+    
+    def get_collisions(self):
+        return sum(self.collision_counts.values())
+
+
+    def calculate_reward(self, vehicle):
         """
-        Calculate the reward for a vehicle based on anomaly detection and other factors.
+        Calculate the reward for a vehicle based on collision avoidance.
 
         Args:
             vehicle: The vehicle for which to calculate the reward.
-            anomaly_detected (bool): Whether an anomaly was detected.
-            action: The action taken by the vehicle.
 
         Returns:
             float: The calculated reward for the vehicle.
         """
         reward = 0.0
 
-        # Penalize if a hazard is detected
-        if anomaly_detected:
-            reward -= 50  # Negative reward for encountering a hazard
+        # Check for collisions and penalize accordingly
+        if self.collision_counts[vehicle.id] > 0:
+            reward -= 100  # Apply a penalty for each collision
 
-        # Additional considerations based on the action taken
-        # Example: Reward for safe driving actions, penalize for risky maneuvers
+        # Reset collision count after penalizing to avoid double-counting
+        self.collision_counts[vehicle.id] = 0
 
         return reward
+
 
     def default_action(self):
         """
@@ -355,22 +387,59 @@ class CarlaEnv:
         elif hazard_type == 'weather_change':
             self.change_weather_conditions()
 
+        return hazard_type
+
     def create_static_obstacle(self):
         """
         Spawn a static obstacle on the road.
         """
         obstacle_bp = self.world.get_blueprint_library().find('static.prop.streetbarrier')
         obstacle_location = self.select_hazard_location()
-        self.world.spawn_actor(obstacle_bp, carla.Transform(obstacle_location))
+
+        if self.is_location_clear(obstacle_location):
+            self.world.spawn_actor(obstacle_bp, carla.Transform(obstacle_location))
+        else:
+            print("Obstacle spawn location is not clear, skipping spawn.")
 
     def create_dynamic_event(self):
         """
         Create a dynamic event like sudden pedestrian crossing or vehicle breakdown.
         """
-        # Example: Sudden pedestrian crossing
         pedestrian_bp = self.world.get_blueprint_library().filter("walker.pedestrian.*")[0]
         pedestrian_location = self.select_hazard_location(offset_y=3)  # Slightly offset from the road
-        self.world.spawn_actor(pedestrian_bp, carla.Transform(pedestrian_location))
+
+        if self.is_location_clear(pedestrian_location):
+            self.world.spawn_actor(pedestrian_bp, carla.Transform(pedestrian_location))
+        else:
+            print("Pedestrian spawn location is not clear, skipping spawn.")
+
+    def select_hazard_location(self, offset_y=0):
+        """
+        Select a random location on the road to place the hazard.
+        """
+        map = self.world.get_map()
+        spawn_points = map.get_spawn_points()
+        hazard_location = random.choice(spawn_points).location
+        hazard_location.y += offset_y  # Adjusting position if needed
+        return hazard_location
+
+    def is_location_clear(self, location, threshold_distance=2.0):
+        """
+        Check if the given location is clear of other actors.
+
+        Args:
+            location (carla.Location): The location to check.
+            threshold_distance (float): The minimum distance from other actors to be considered clear.
+
+        Returns:
+            bool: True if location is clear, False otherwise.
+        """
+        actors = self.world.get_actors()
+        for actor in actors:
+            if actor.get_location().distance(location) < threshold_distance:
+                return False
+        return True
+
 
     def change_weather_conditions(self):
         """
@@ -385,25 +454,49 @@ class CarlaEnv:
         )
         self.world.set_weather(weather)
 
-    def select_hazard_location(self, offset_y=0):
-        """
-        Select a random location on the road to place the hazard.
-        """
-        map = self.world.get_map()
-        spawn_points = map.get_spawn_points()
-        hazard_location = random.choice(spawn_points).location
-        hazard_location.y += offset_y  # Adjusting position if needed
-        return hazard_location
-
+    
     def reset(self):
-        # Reset logic
-        # Clean up existing vehicles and sensors before resetting
-        # self.cleanup()
+        # Check if vehicles and sensors are already set up
+        # if not self.vehicles or not self.camera_sensors:
+        #     # If not, set them up
+        #     self.setup_vehicle_and_sensors(self.num_agents)
+        # else:
+        #     # Otherwise, reset existing vehicles and sensors
+        #     for vehicle in self.vehicles:
+        #         # Reset vehicle position, velocity, etc.
+        #         self.reset_vehicle_state(vehicle)
 
-        # Logic to reset and initialize the environment
-        # Setup vehicles and sensors for the new episode
-        # self.setup_vehicle_and_sensors(self.num_agents)
+        #     # Clear sensor data buffers if necessary
+        #     self.clear_sensor_data_buffers()
+
+        # # Reset other environmental elements like traffic lights or weather
+        # self.reset_environment_state()
+
+        # Return the initial state for the new episode
         return self.get_state()
+
+    def reset_vehicle_state(self, vehicle):
+        if vehicle.is_alive:
+            # Reset vehicle position, velocity, and other states
+            spawn_points = self.world.get_map().get_spawn_points()
+            vehicle.set_transform(random.choice(spawn_points))
+
+            # Reset vehicle velocity to zero
+            control = carla.VehicleControl(throttle=0.0, steer=0.0, brake=1.0, hand_brake=True)
+            vehicle.apply_control(control)
+            self.collision_counts[vehicle.id] = 0  # Reset collision count
+
+    def clear_sensor_data_buffers(self):
+        # Ensure each vehicle has a corresponding sensor
+        for sensor, vehicle in zip(self.camera_sensors, self.vehicles):
+            if vehicle.is_alive:
+                sensor.listen(lambda image_data, vid=vehicle.id: self.camera_callback(image_data, vid))
+
+    def reset_environment_state(self):
+        default_weather = carla.WeatherParameters.ClearNoon
+        self.world.set_weather(default_weather)
+
+
     
     def cleanup(self):
         # Iterate over all vehicles and their sensors to destroy them
@@ -467,20 +560,30 @@ class CarlaEnv:
         return hazard_detected, vehicle_location
 
 
-    def check_done(self):
+    def check_done(self, max_timesteps=None, current_timestep=None):
         """
         Check if the episode should be terminated.
+
+        Args:
+            max_timesteps (int): Optional. Maximum number of timesteps in an episode.
+            current_timestep (int): Optional. The current timestep of the episode.
 
         Returns:
             bool: True if the episode is done, False otherwise.
         """
-        # Check for any condition that should end the episode for all agents
-        if all(self.anomaly_flags):
+        # Terminate if any vehicle has collided
+        if any(self.collision_counts.values()):
             return True
+
+        # Terminate if a maximum timestep limit is set and reached
+        if max_timesteps is not None and current_timestep is not None:
+            if current_timestep >= max_timesteps:
+                return True
 
         # Add other conditions here if necessary
 
         return False
+
 
 
 

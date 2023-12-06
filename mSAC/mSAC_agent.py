@@ -11,11 +11,12 @@ if torch.cuda.is_available():
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class Agent:
-    def __init__(self, state_dim, action_dim, num_agents, actor_lr=1e-4, critic_lr=1e-3, tau=0.005, gamma=0.99, alpha=0.2, hidden_dim=256):
+    def __init__(self, state_dim, action_dim, num_agents, batch_size, actor_lr=1e-4, critic_lr=1e-3, tau=0.005, gamma=0.99, alpha=0.2, hidden_dim=256):
+        self.batch_size = batch_size
         self.hidden_dim = hidden_dim
-        self.actors = [nn.DataParallel(Actor(state_dim, action_dim, hidden_dim)).to(device) for _ in range(num_agents)]
-        self.critics = [nn.DataParallel(Critic(state_dim, action_dim, hidden_dim)).to(device) for _ in range(num_agents)]
-        self.target_critics = [nn.DataParallel(Critic(state_dim, action_dim, hidden_dim)).to(device) for _ in range(num_agents)]
+        self.actors = [nn.DataParallel(Actor(state_dim, action_dim, hidden_dim), device_ids=[1]).to(device) for _ in range(num_agents)]
+        self.critics = [nn.DataParallel(Critic(state_dim, action_dim, hidden_dim), device_ids=[1]).to(device) for _ in range(num_agents)]
+        self.target_critics = [nn.DataParallel(Critic(state_dim, action_dim, hidden_dim), device_ids=[1]).to(device) for _ in range(num_agents)]
         
         for target_critic, critic in zip(self.target_critics, self.critics):
             target_critic.load_state_dict(critic.state_dict())
@@ -23,29 +24,34 @@ class Agent:
         self.actor_optimizers = [optim.Adam(actor.parameters(), lr=actor_lr) for actor in self.actors]
         self.critic_optimizers = [optim.Adam(critic.parameters(), lr=critic_lr) for critic in self.critics]
 
-        self.mixing_network = MixingNetwork(num_agents, state_dim)
-        self.target_mixing_network = MixingNetwork(num_agents, state_dim)
+        self.mixing_network = MixingNetwork(num_agents, state_dim).to(device)
+        self.target_mixing_network = MixingNetwork(num_agents, state_dim).to(device)
         self.mixing_network_optimizer = optim.Adam(self.mixing_network.parameters(), lr=critic_lr)
 
         self.tau = tau
         self.gamma = gamma
         self.alpha = alpha
         self.num_agents = num_agents
-        self.actor_hxs = [torch.zeros(1, hidden_dim).to(device) for _ in range(num_agents)]
-        self.critic_hxs = [torch.zeros(1, hidden_dim).to(device) for _ in range(num_agents)]
+        self.actor_hxs = [torch.zeros(batch_size, hidden_dim).to(device) for _ in range(num_agents)] # changing to batch size
+        self.critic_hxs = [torch.zeros(batch_size, hidden_dim).to(device) for _ in range(num_agents)]
+        # Initialize target critic hidden states
+        self.target_critic_hxs = [torch.zeros(batch_size, hidden_dim).to(device) for _ in range(num_agents)]
 
         # Clear the cache after initializing all components
         torch.cuda.empty_cache()
 
     
     def select_action(self, state, agent_idx):
-        # Convert state to tensor and sample action from the actor network
-        if not isinstance(state, np.ndarray):
-            state = np.array(state)
-
+        # Convert state to tensor
         state_tensor = torch.FloatTensor(state).to(device).unsqueeze(0)
-        raw_action, log_prob, hx = self.actors[agent_idx].module.sample(state_tensor, self.actor_hxs[agent_idx])
-        self.actor_hxs[agent_idx] = hx.detach()
+        batch_size = state_tensor.size(0)
+
+        hx = self.actor_hxs[agent_idx]
+        if hx.size(0) != batch_size:
+            hx = torch.zeros(batch_size, self.hidden_dim).to(device)
+
+        raw_action, log_prob, new_hx = self.actors[agent_idx].module.sample(state_tensor, hx)
+        self.actor_hxs[agent_idx] = new_hx.detach()  # Update the hidden state
 
         # Remove the batch dimension if it's present
         if raw_action.dim() > 1:
@@ -71,7 +77,6 @@ class Agent:
 
         return action, log_prob
 
-
     def update_parameters(self, batch, agent_idx):
         states, actions, rewards, next_states, dones = batch
         states = torch.FloatTensor(states).to(device)
@@ -80,56 +85,61 @@ class Agent:
         next_states = torch.FloatTensor(next_states).to(device)
         dones = torch.FloatTensor(dones).to(device).unsqueeze(1)
 
-        # Get current Q-values from the critic network for current state-action pairs
-        current_Q_values, current_hx = self.critics[agent_idx](states, actions, self.critic_hxs[agent_idx])
-        
-        # Sample new actions and their log probabilities from the actor network
-        new_actions, log_probs, new_hx = self.actors[agent_idx].sample(states, self.actor_hxs[agent_idx])
-        
-        # Get new Q-values from the critic network for the new state-action pairs
+        critic_hx = self.critic_hxs[agent_idx].clone().detach()
+        current_Q_values, current_hx = self.critics[agent_idx](states, actions, critic_hx)
+
+        actor_hx = self.actor_hxs[agent_idx].clone().detach()
+        new_actions, log_probs, new_hx = self.actors[agent_idx].module.sample(states, actor_hx)
+
         new_Q_values, _ = self.critics[agent_idx](states, new_actions, new_hx)
 
-        # Calculate total Q-value using the mixing network
+        # Calculate total Q-value using mixing network
         total_Q = self.mixing_network(states, torch.stack([critic(states, actions, hx)[0] for critic, hx in zip(self.critics, self.critic_hxs)], dim=1))
-        
-        # Calculate the target Q-values using target critic networks
-        target_total_Q = torch.zeros_like(total_Q)
+
+        # Calculate target Q-values using target critic networks
         with torch.no_grad():
+            target_qs = []
             for idx in range(self.num_agents):
-                target_actions, _, target_hx = self.target_critics[idx].sample(next_states, self.target_critic_hxs[idx])
-                target_Q, _ = self.target_critics[idx](next_states, target_actions, target_hx)
-                target_total_Q += target_Q
+                target_critic_hx = self.target_critic_hxs[idx].clone().detach()
+                target_Q, _ = self.target_critics[idx](next_states, new_actions, target_critic_hx)
+                target_qs.append(target_Q)
+
+            target_qs_stacked = torch.stack(target_qs, dim=1)
+            target_total_Q = self.target_mixing_network(next_states, target_qs_stacked)
             target_total_Q = rewards + self.gamma * (1 - dones) * target_total_Q
 
-        # Critic loss is the mean squared TD error
-        critic_loss = torch.nn.functional.mse_loss(current_Q_values, target_total_Q.detach())
+        # Critic loss
+        critic_loss = torch.nn.functional.mse_loss(total_Q, target_total_Q)
         self.critic_optimizers[agent_idx].zero_grad()
         critic_loss.backward()
         self.critic_optimizers[agent_idx].step()
 
-        # Update the actor using the policy gradient
+        # Actor loss
         actor_loss = -(self.alpha * log_probs + new_Q_values).mean()
         self.actor_optimizers[agent_idx].zero_grad()
         actor_loss.backward()
         self.actor_optimizers[agent_idx].step()
 
-        # Update hidden states
-        self.critic_hxs[agent_idx] = current_hx.detach()
-        self.actor_hxs[agent_idx] = new_hx.detach()
+        # Update hidden states and target networks
+        self.critic_hxs[agent_idx] = current_hx.clone().detach()
+        self.actor_hxs[agent_idx] = new_hx.clone().detach()
+        self.soft_update_target_networks()
 
-        # Soft update of target networks
+
+
+    def soft_update_target_networks(self):
         for target_critic, critic in zip(self.target_critics, self.critics):
             for target_param, param in zip(target_critic.parameters(), critic.parameters()):
                 target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
 
-        # Update the target mixing network
-        self.target_mixing_network.soft_update()
+        # Update target mixing network
+        for target_param, param in zip(self.target_mixing_network.parameters(), self.mixing_network.parameters()):
+            target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
 
 
     # Reset hidden states at the beginning of each episode
     def reset_hxs(self):
-        self.actor_hxs = [torch.zeros(1, self.hidden_dim).to(device) for _ in range(self.num_agents)]
-        self.critic_hxs = [torch.zeros(1, self.hidden_dim).to(device) for _ in range(self.num_agents)]
+        self.actor_hxs = [torch.zeros(self.batch_size, self.hidden_dim).to(device) for _ in range(self.num_agents)]
+        self.critic_hxs = [torch.zeros(self.batch_size, self.hidden_dim).to(device) for _ in range(self.num_agents)]
 
-    # Additional methods as necessary
 
