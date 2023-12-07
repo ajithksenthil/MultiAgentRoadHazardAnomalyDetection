@@ -18,6 +18,8 @@ import torchvision.models as models
 from torchvision.models import resnet18, ResNet18_Weights
 import segmentation_models_pytorch as smp
 
+import os
+import csv
 
 
 class StreetHazardsDataset(Dataset):
@@ -133,6 +135,21 @@ def compute_iou(preds, labels, num_classes=13):
 
 
 if __name__ == "__main__":
+
+    # Define file paths for saving metrics
+    train_metrics_file = 'training_metrics.csv'
+    val_metrics_file = 'validation_metrics.csv'
+
+    # Initialize CSV files for saving metrics
+    with open(train_metrics_file, 'w', newline='') as file:
+        writer = csv.writer(file)
+        writer.writerow(['Epoch', 'Loss'])
+
+    with open(val_metrics_file, 'w', newline='') as file:
+        writer = csv.writer(file)
+        writer.writerow(['Epoch', 'Val Loss', 'Pixel Accuracy', 'mIoU', 'AUPR', 'FPR95', 'AUROC'])
+
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Hyperparameters
@@ -188,6 +205,12 @@ if __name__ == "__main__":
 
             # print(f"Epoch: {epoch+1}, Batch: {batch_idx+1}, Loss: {loss.item()}")
         avg_train_loss = train_loss / len(data_loader)
+
+        # Save training metrics
+        with open(train_metrics_file, 'a', newline='') as file:
+            writer = csv.writer(file)
+            writer.writerow([epoch + 1, avg_train_loss])
+
         print(f"Epoch [{epoch+1}/{num_epochs}], Loss: {avg_train_loss:.4f}")
 
         # Validation Loop
@@ -240,6 +263,11 @@ if __name__ == "__main__":
         
         # AUPR calculation (average AUPR if there are multiple batches)
         avg_aupr = np.mean([auc(recall_list[i], precision_list[i]) for i in range(len(precision_list))])
+
+        # Save validation metrics
+        with open(val_metrics_file, 'a', newline='') as file:
+            writer = csv.writer(file)
+            writer.writerow([epoch + 1, avg_val_loss, avg_pixel_accuracy, avg_iou, avg_aupr, fpr95, auroc])
 
         print(f"Epoch: {epoch+1} - Val Loss: {avg_val_loss:.4f}, Pixel Accuracy: {avg_pixel_accuracy:.4f}, mIoU: {avg_iou:.4f}, AUPR: {avg_aupr:.4f}")
         print(f"Epoch: {epoch+1} - Val Loss: {avg_val_loss:.4f}, FPR95: {fpr95:.2f}%, AUROC: {auroc:.2f}%, AUPR: {aupr:.2f}%")
