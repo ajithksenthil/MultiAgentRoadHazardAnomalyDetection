@@ -13,31 +13,36 @@ class Actor(nn.Module):
         self.log_std_head = nn.Linear(hidden_dim, action_dim)
 
     def forward(self, state, hx):
-        # Debugging: Print the shape of state and hx
-        # print(f"State shape: {state.shape}, HX shape: {hx.shape}")
-
+        print("actor forward start")
+        print("hx version", hx._version)
         # Reshape state if it is 3D (batch, sequence, features)
         if state.dim() == 3:
+            print("reshaping state")
             state = state.view(-1, state.size(-1))
 
         x = F.relu(self.fc1(state))
-        hx = self.gru(x, hx)  # Update hidden state
-        x = F.relu(self.fc2(hx))
+        hx_clone = hx.clone()  # Clone to avoid inplace modification
+        print("hx_clone actor version", hx_clone._version)
+        hx_updated = self.gru(x, hx_clone)
+        print("hx_updated actor version", hx_updated._version)
+        x = F.relu(self.fc2(hx_updated))
         mu = self.mu_head(x)
         log_std = self.log_std_head(x)
         log_std = torch.clamp(log_std, min=-20, max=2)  # Prevents numerical instability
-        return mu, log_std, hx
-
-
+        print("actor forward end")
+        return mu, log_std, hx_updated
+    
     def sample(self, state, hx):
         # Debugging: Print the shape of state and hx
         # print(f"State shape: {state.shape}, HX shape: {hx.shape}")
         batch_size = state.size(0)  # Get the batch size from the state tensor
+        print("hx version actor sample ", hx._version)
         if hx.size(0) != batch_size:
             hx = hx.expand(batch_size, -1).contiguous().clone()  # Adjust hx to match the batch size
-        
+        print("hx version actor sample ", hx._version)
         # Forward pass to get mean, log std, and updated hidden state
         mu, log_std, hx = self.forward(state, hx)
+        print("hx version actor sample ", hx._version)
         std = log_std.exp()
         dist = torch.distributions.Normal(mu, std)
         z = dist.rsample()
@@ -54,19 +59,71 @@ class Critic(nn.Module):
         self.fc2 = nn.Linear(hidden_dim, hidden_dim)
         self.q_head = nn.Linear(hidden_dim, 1)
 
+
+    def forward(self, state, action, hx):
+        print("critic forward start")
+        batch_size = state.size(0)  # Get the batch size from the state tensor
+        hx = hx.expand(batch_size, -1).contiguous().clone()
+
+        x = torch.cat([state, action], dim=1)
+        x = F.relu(self.fc1(x)) 
+        hx_clone = hx.clone()  # Clone to avoid inplace modification
+        print("hx_clone version ", hx_clone._version) # version 0
+        hx_updated = self.gru(x, hx_clone) # when I take away the GRU we still get the same error as before, with or without it
+        print("hx_updated ", hx_updated._version) # version 2
+        # x = x.detach() # how come adding this does not change the outcome, the error comes regardless
+        # x = x.clone() # this does not help either
+        x = F.relu(self.fc2(hx_updated))
+        # x = x.clone() # this does not help
+        # x = x.detach() # how come when I add this it works but when I take it away same error
+        print("Before forward in Critic - q_value version:", x._version)
+        q_value = self.q_head(x)
+        print("After forward in Critic - q_value version:", q_value._version)
+        return q_value, hx_updated
+    
+    """
+    /Users/ajithsenthil/opt/anaconda3/lib/python3.9/site-packages/torch/autograd/__init__.py:200: UserWarning: Error detected in AddmmBackward0. Traceback of forward call that caused the error:
+  File "/Users/ajithsenthil/Desktop/RobotLearning/FinalProject/mSAC/test_critic_loss_new.py", line 70, in <module>
+    update_parameters(0)
+  File "/Users/ajithsenthil/Desktop/RobotLearning/FinalProject/mSAC/test_critic_loss_new.py", line 42, in update_parameters
+    new_Q_values, _ = critics[agent_idx](states, new_actions, new_hx)
+  File "/Users/ajithsenthil/opt/anaconda3/lib/python3.9/site-packages/torch/nn/modules/module.py", line 1501, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/Users/ajithsenthil/Desktop/RobotLearning/FinalProject/mSAC/mSAC_models.py", line 81, in forward
+    q_value = self.q_head(x)
+  File "/Users/ajithsenthil/opt/anaconda3/lib/python3.9/site-packages/torch/nn/modules/module.py", line 1501, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/Users/ajithsenthil/opt/anaconda3/lib/python3.9/site-packages/torch/nn/modules/linear.py", line 114, in forward
+    return F.linear(input, self.weight, self.bias)
+ (Triggered internally at /Users/runner/work/pytorch/pytorch/pytorch/torch/csrc/autograd/python_anomaly_mode.cpp:119.)
+  Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass
+Traceback (most recent call last):
+  File "/Users/ajithsenthil/Desktop/RobotLearning/FinalProject/mSAC/test_critic_loss_new.py", line 70, in <module>
+    update_parameters(0)
+  File "/Users/ajithsenthil/Desktop/RobotLearning/FinalProject/mSAC/test_critic_loss_new.py", line 64, in update_parameters
+    actor_loss.backward()
+  File "/Users/ajithsenthil/opt/anaconda3/lib/python3.9/site-packages/torch/_tensor.py", line 487, in backward
+    torch.autograd.backward(
+  File "/Users/ajithsenthil/opt/anaconda3/lib/python3.9/site-packages/torch/autograd/__init__.py", line 200, in backward
+    Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass
+RuntimeError: one of the variables needed for gradient computation has been modified by an inplace operation: [torch.FloatTensor [256, 1]], which is output 0 of AsStridedBackward0, is at version 2; expected version 1 instead. Hint: the backtrace further above shows the operation that failed to compute its gradient. The variable in question was changed in there or anywhere later. Good luck!
+    """
+
+
+
+    """ 
     def forward(self, state, action, hx):
         batch_size = state.size(0)  # Get the batch size from the state tensor
-
-        # hx = hx.expand(batch_size, -1).contiguous()  # Adjust hx to match the batch size
-        hx = hx.expand(batch_size, -1).contiguous().clone()
         x = torch.cat([state, action], dim=1)
         x = F.relu(self.fc1(x))
-        hx = self.gru(x, hx)  # Update hidden state
-        x = F.relu(self.fc2(hx))
+
+        # Clone hx to avoid inplace modification
+        hx_clone = hx.clone()
+        hx_updated = self.gru(x, hx_clone)  # Update hidden state with the clone
+        x = F.relu(self.fc2(hx_updated))
         q_value = self.q_head(x)
-
-        return q_value, hx
-
+        return q_value, hx_updated
+    """
 class HyperNetwork(nn.Module):
     def __init__(self, state_dim, num_agents):
         super(HyperNetwork, self).__init__()
@@ -105,6 +162,7 @@ class MixingNetwork(nn.Module):
         if local_qs.dim() == 3:
             local_qs = local_qs.view(local_qs.size(0), -1)
 
+        print("local qs size: ", local_qs.size()) # this is [128, 5, 1] this could be the issue with the inplace operation
         # Ensure w1 is correctly broadcastable with local_qs
         if w1.dim() != local_qs.dim():
             w1 = w1.unsqueeze(-1)

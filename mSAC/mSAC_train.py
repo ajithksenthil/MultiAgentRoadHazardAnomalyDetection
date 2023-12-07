@@ -11,7 +11,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 def train_mSAC(env, num_agents, max_episodes, max_timesteps, batch_size):
 
-    # reduce batch size TODO see if this works
+    # reduce batch size 
     batch_size = batch_size 
 
     # Initialize agents and their optimizers
