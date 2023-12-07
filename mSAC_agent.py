@@ -30,7 +30,7 @@ class Agent:
 
         self.tau = tau
         self.gamma = gamma
-        self.alpha = alpha
+        self.alpha = alpha # TODO implement more robust entropy calculation later
         self.num_agents = num_agents
         self.actor_hxs = [torch.zeros(batch_size, hidden_dim).to(device) for _ in range(num_agents)] # changing to batch size
         self.critic_hxs = [torch.zeros(batch_size, hidden_dim).to(device) for _ in range(num_agents)]
@@ -77,79 +77,82 @@ class Agent:
 
         return action, log_prob
 
-
-
     def update_parameters(self, batch, agent_idx):
         states, actions, rewards, next_states, dones = batch
         states = torch.FloatTensor(states).to(device)
-        print(f"First action element: {actions[0]}, Type: {type(actions[0])}")
         actions = torch.FloatTensor(actions).to(device)
         rewards = torch.FloatTensor(rewards).to(device).unsqueeze(1)
         next_states = torch.FloatTensor(next_states).to(device)
         dones = torch.FloatTensor(dones).to(device).unsqueeze(1)
 
-        critic_hx = self.critic_hxs[agent_idx]
-        if critic_hx.size(0) != states.size(0):
-            critic_hx = critic_hx[:states.size(0)].contiguous()
-
+        print("states, actions, rewards, next_states, dones versions: ", states._version, actions._version, rewards._version, next_states._version, dones._version)
+        critic_hx = self.critic_hxs[agent_idx].clone().detach()
+        print("critic_hx version ", critic_hx._version)
         current_Q_values, current_hx = self.critics[agent_idx](states, actions, critic_hx)
 
-        actor_hx = self.actor_hxs[agent_idx]
-        if actor_hx.size(0) != states.size(0):
-            actor_hx = actor_hx[:states.size(0)].contiguous()
-
+        print("current_hx version ", current_hx._version)
+        actor_hx = self.actor_hxs[agent_idx].clone().detach()
+        print(actor_hx._version)
         new_actions, log_probs, new_hx = self.actors[agent_idx].module.sample(states, actor_hx)
-        
-        # Get new Q-values from the critic network for the new state-action pairs
+        print("new_actions, log_probs, new_hx version", new_actions._version, log_probs._version, new_hx._version)
+
         new_Q_values, _ = self.critics[agent_idx](states, new_actions, new_hx)
-
-        # Calculate total Q-value using the mixing network
+        print("new_Q_values ", new_Q_values._version)
+        # Calculate total Q-value using mixing network
         total_Q = self.mixing_network(states, torch.stack([critic(states, actions, hx)[0] for critic, hx in zip(self.critics, self.critic_hxs)], dim=1))
-
-        # Calculate the target Q-values using target critic networks
-        target_total_Q = torch.zeros_like(total_Q)
+        print("total_Q version ", total_Q)
+        print("states, actions, rewards, next_states, dones versions: ", states._version, actions._version, rewards._version, next_states._version, dones._version)
+        # Calculate target Q-values using target critic networks
         with torch.no_grad():
+            target_qs = []
             for idx in range(self.num_agents):
-                # Generate new actions for the next states using the target actor models (if implemented)
-                # target_action, _, _ = self.target_actors[idx].sample(next_states, self.target_actor_hxs[idx])
-
-                # Retrieve the corresponding hidden state for the target critic
-                target_critic_hx = self.target_critic_hxs[idx]
-
-                # Ensure the hidden state size matches the batch size
-                if target_critic_hx.size(0) != next_states.size(0):
-                    target_critic_hx = target_critic_hx[:next_states.size(0)].contiguous()
-
-                # Calculate target Q-values using target critics
-                # Here, use either the target_action (from target actors) or some other action logic
+                target_critic_hx = self.target_critic_hxs[idx].clone().detach()
                 target_Q, _ = self.target_critics[idx](next_states, new_actions, target_critic_hx)
-                target_total_Q += target_Q
+                target_qs.append(target_Q)
 
+            target_qs_stacked = torch.stack(target_qs, dim=1)
+            target_total_Q = self.target_mixing_network(next_states, target_qs_stacked)
             target_total_Q = rewards + self.gamma * (1 - dones) * target_total_Q
 
-        # Critic loss is the mean squared TD error
-        critic_loss = torch.nn.functional.mse_loss(current_Q_values, target_total_Q.detach())
+        print("target_critic_hx ", target_critic_hx._version)
+        print("new_actions, log_probs, new_hx version", new_actions._version, log_probs._version, new_hx._version)
+        print("states, actions, rewards, next_states, dones versions: ", states._version, actions._version, rewards._version, next_states._version, dones._version)
+        # Critic loss
+        # TODO add debugging steps and print statements
+        
+        print("before loss calc: total_Q version and target_total_Q version: ", total_Q._version, target_total_Q._version)
+        critic_loss = torch.nn.functional.mse_loss(total_Q, target_total_Q)
+        print("after loss calc: total_Q version and target_total_Q version: ", total_Q._version, target_total_Q._version)
         self.critic_optimizers[agent_idx].zero_grad()
+        print("after loss calc and optimizers zero grad: total_Q version and target_total_Q version: ", total_Q._version, target_total_Q._version)
         critic_loss.backward()
+        print("after loss backwards: total_Q version and target_total_Q version: ", total_Q._version, target_total_Q._version)
         self.critic_optimizers[agent_idx].step()
-
-        # Update the actor using the policy gradient
+        print("after optimizers step: total_Q version and target_total_Q version: ", total_Q._version, target_total_Q._version)
+        print("states, actions, rewards, next_states, dones versions: ", states._version, actions._version, rewards._version, next_states._version, dones._version)
+        # Actor loss
+        print("log_probs and newQ vals versions:", log_probs._version, new_Q_values._version)
         actor_loss = -(self.alpha * log_probs + new_Q_values).mean()
         self.actor_optimizers[agent_idx].zero_grad()
+        print("after loss calc: log_probs and newQ vals versions:", log_probs._version, new_Q_values._version)
         actor_loss.backward()
         self.actor_optimizers[agent_idx].step()
 
-        # Update hidden states
-        self.critic_hxs[agent_idx] = current_hx.detach()
-        self.actor_hxs[agent_idx] = new_hx.detach()
+        # Update hidden states and target networks
+        self.critic_hxs[agent_idx] = current_hx.clone().detach()
+        self.actor_hxs[agent_idx] = new_hx.clone().detach()
+        self.soft_update_target_networks()
 
-        # Soft update of target networks
+
+
+    def soft_update_target_networks(self):
         for target_critic, critic in zip(self.target_critics, self.critics):
             for target_param, param in zip(target_critic.parameters(), critic.parameters()):
                 target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
 
-        # Update the target mixing network
-        self.target_mixing_network.soft_update()
+        # Update target mixing network
+        for target_param, param in zip(self.target_mixing_network.parameters(), self.mixing_network.parameters()):
+            target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
 
 
     # Reset hidden states at the beginning of each episode
@@ -157,5 +160,4 @@ class Agent:
         self.actor_hxs = [torch.zeros(self.batch_size, self.hidden_dim).to(device) for _ in range(self.num_agents)]
         self.critic_hxs = [torch.zeros(self.batch_size, self.hidden_dim).to(device) for _ in range(self.num_agents)]
 
-    # Additional methods as necessary
 
