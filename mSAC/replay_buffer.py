@@ -35,14 +35,6 @@ class ReplayBuffer:
         batch = random.sample(self.buffers[agent_index], batch_size)
         state, action, reward, next_state, done = map(np.stack, zip(*batch))
 
-        # Print statements for debugging
-        print(f"Agent {agent_index} sample types and shapes:")
-        print(f"State: {type(state)}, Shape: {state.shape}")
-        print(f"Action: {type(action)}, Shape: {action.shape}")
-        print(f"Reward: {type(reward)}, Shape: {reward.shape}")
-        print(f"Next State: {type(next_state)}, Shape: {next_state.shape}")
-        print(f"Done: {type(done)}, Shape: {done.shape}")
-
         return (state, action, reward, next_state, done)
 
 

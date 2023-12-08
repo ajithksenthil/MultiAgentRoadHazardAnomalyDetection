@@ -20,7 +20,7 @@ def run_experiment(client, traffic_manager, num_agents, num_episodes):
     env = CarlaEnv(client, traffic_manager, num_agents)
 
     # Train mSAC agents
-    agents = train_mSAC(env, num_agents, num_episodes, max_timesteps=1000, batch_size=128)
+    agents = train_mSAC(env, num_agents, num_episodes, max_timesteps=5, batch_size=64)
     torch.cuda.empty_cache()
     print("finished training mSAC")
 
@@ -29,7 +29,7 @@ def run_experiment(client, traffic_manager, num_agents, num_episodes):
     all_actions = []  # Store all actions here
 
     # Simulation loop
-    max_timesteps_per_episode = 1000  # Set this based on your simulation requirements
+    max_timesteps_per_episode = 5  # Set this based on your simulation requirements
 
     for episode in range(num_episodes):
         hazard_type = env.create_hazardous_scenario()  # Create a hazardous scenario

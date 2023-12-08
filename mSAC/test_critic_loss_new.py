@@ -3,8 +3,8 @@ import torch.optim as optim
 import torch.nn as nn
 import torch.nn.functional as F
 from mSAC_models import Actor, Critic, MixingNetwork
-from torch.autograd import gradcheck
-import torchviz
+
+import numpy as np
 """
 class Actor(nn.Module):
     def __init__(self, state_dim, action_dim, hidden_dim=256):
@@ -171,15 +171,35 @@ def update_parameters(agent_idx):
     # current_Q_values = current_Q_values.detach() # so this when added makes the code run smoothly before it can reach the mixing network
     print("Before mixing network backward - current_Q_values version:", current_Q_values._version)
     total_Q = mixing_network(states, torch.stack([current_Q_values for _ in range(num_agents)], dim=1))
+    # total_Q = torch.mean(torch.stack([current_Q_values for _ in range(num_agents)])) # removing the mixing network does not get rid of error
     print("after mixing network backward - current_Q_values version:", current_Q_values._version)
-    current_Q_values = current_Q_values.detach() # so when this is added, the error still shows up regardless
+    # current_Q_values = current_Q_values.detach() # so when this is added, the error still shows up regardless
     print("total_Q version", total_Q._version)
     # Calculate target Q-values using dummy data
-    target_total_Q = rewards + (1 - dones) * total_Q.detach()
+    target_total_Q = rewards + (1 - dones) * total_Q
     print("target_total_Q version", target_total_Q._version)
+    
+    
+    # Zero gradients for both optimizers
+    critic_optimizers[agent_idx].zero_grad()
+    actor_optimizers[agent_idx].zero_grad()
+
+    # Compute critic loss and perform backward pass
+    critic_loss = F.mse_loss(total_Q, target_total_Q)
+    critic_loss.backward()
+
+    # Compute actor loss and perform backward pass
+    actor_loss = -(log_probs.mean() + new_Q_values.mean())
+    actor_loss.backward()
+
+    # After both backward passes, update the parameters
+    critic_optimizers[agent_idx].step()
+    actor_optimizers[agent_idx].step()
+
+    """ 
     # Critic loss
     critic_loss = F.mse_loss(total_Q, target_total_Q)
-    
+
     # Visualize the computation graph
     graph = torchviz.make_dot(critic_loss, params=dict(critics[agent_idx].named_parameters()))
     graph.render("critic_computation_graph", format="png")  # Saves the graph as a PNG file
@@ -203,6 +223,8 @@ def update_parameters(agent_idx):
     print("After actor loss backward - new_Q_values version:", new_Q_values._version)
     actor_optimizers[agent_idx].step()
     print("After actor loss backward: new_actions, log_probs, new_Q_values versions:", new_actions._version, log_probs._version, new_Q_values._version)
+    """
+
 
 # Testing update parameters for one agent
 torch.autograd.set_detect_anomaly(True)

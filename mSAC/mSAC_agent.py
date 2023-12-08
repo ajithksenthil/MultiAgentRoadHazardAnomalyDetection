@@ -85,23 +85,19 @@ class Agent:
         next_states = torch.FloatTensor(next_states).to(device)
         dones = torch.FloatTensor(dones).to(device).unsqueeze(1)
 
-        print("states, actions, rewards, next_states, dones versions: ", states._version, actions._version, rewards._version, next_states._version, dones._version)
-        critic_hx = self.critic_hxs[agent_idx].clone().detach()
-        print("critic_hx version ", critic_hx._version)
+        critic_hx = self.critic_hxs[agent_idx].to(device)
         current_Q_values, current_hx = self.critics[agent_idx](states, actions, critic_hx)
 
-        print("current_hx version ", current_hx._version)
-        actor_hx = self.actor_hxs[agent_idx].clone().detach()
-        print(actor_hx._version)
+        actor_hx = self.actor_hxs[agent_idx].to(device)
+        # print(actor_hx._version)
         new_actions, log_probs, new_hx = self.actors[agent_idx].module.sample(states, actor_hx)
-        print("new_actions, log_probs, new_hx version", new_actions._version, log_probs._version, new_hx._version)
+
 
         new_Q_values, _ = self.critics[agent_idx](states, new_actions, new_hx)
-        print("new_Q_values ", new_Q_values._version)
+
         # Calculate total Q-value using mixing network
         total_Q = self.mixing_network(states, torch.stack([critic(states, actions, hx)[0] for critic, hx in zip(self.critics, self.critic_hxs)], dim=1))
-        print("total_Q version ", total_Q)
-        print("states, actions, rewards, next_states, dones versions: ", states._version, actions._version, rewards._version, next_states._version, dones._version)
+
         # Calculate target Q-values using target critic networks
         with torch.no_grad():
             target_qs = []
@@ -114,30 +110,23 @@ class Agent:
             target_total_Q = self.target_mixing_network(next_states, target_qs_stacked)
             target_total_Q = rewards + self.gamma * (1 - dones) * target_total_Q
 
-        print("target_critic_hx ", target_critic_hx._version)
-        print("new_actions, log_probs, new_hx version", new_actions._version, log_probs._version, new_hx._version)
-        print("states, actions, rewards, next_states, dones versions: ", states._version, actions._version, rewards._version, next_states._version, dones._version)
-        # Critic loss
-        # TODO add debugging steps and print statements
-        
-        print("before loss calc: total_Q version and target_total_Q version: ", total_Q._version, target_total_Q._version)
-        critic_loss = torch.nn.functional.mse_loss(total_Q, target_total_Q)
-        print("after loss calc: total_Q version and target_total_Q version: ", total_Q._version, target_total_Q._version)
-        self.critic_optimizers[agent_idx].zero_grad()
-        print("after loss calc and optimizers zero grad: total_Q version and target_total_Q version: ", total_Q._version, target_total_Q._version)
-        critic_loss.backward()
-        print("after loss backwards: total_Q version and target_total_Q version: ", total_Q._version, target_total_Q._version)
-        self.critic_optimizers[agent_idx].step()
-        print("after optimizers step: total_Q version and target_total_Q version: ", total_Q._version, target_total_Q._version)
-        print("states, actions, rewards, next_states, dones versions: ", states._version, actions._version, rewards._version, next_states._version, dones._version)
-        # Actor loss
-        print("log_probs and newQ vals versions:", log_probs._version, new_Q_values._version)
-        actor_loss = -(self.alpha * log_probs + new_Q_values).mean()
-        self.actor_optimizers[agent_idx].zero_grad()
-        print("after loss calc: log_probs and newQ vals versions:", log_probs._version, new_Q_values._version)
-        actor_loss.backward()
-        self.actor_optimizers[agent_idx].step()
 
+      
+        # Zero gradients for both optimizers
+        self.critic_optimizers[agent_idx].zero_grad()
+        self.actor_optimizers[agent_idx].zero_grad()
+
+        # Compute critic loss and perform backward pass
+        critic_loss = torch.nn.functional.mse_loss(total_Q, target_total_Q)
+        critic_loss.backward()
+
+        # Compute actor loss and perform backward pass
+        actor_loss = -(self.alpha * log_probs + new_Q_values).mean()
+        actor_loss.backward()
+
+        # After both backward passes, update the parameters
+        self.critic_optimizers[agent_idx].step()
+        self.actor_optimizers[agent_idx].step()
         # Update hidden states and target networks
         self.critic_hxs[agent_idx] = current_hx.clone().detach()
         self.actor_hxs[agent_idx] = new_hx.clone().detach()
