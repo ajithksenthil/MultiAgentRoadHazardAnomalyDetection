@@ -31,9 +31,15 @@ class PolicyNetwork(nn.Module):
     def forward(self, x):
         x = F.relu(self.bn1(self.conv1(x)))
         x = F.relu(self.bn2(self.conv2(x)))
-        x = torch.softmax(self.conv3(x), dim=1)
-        return x
 
+        # Apply softmax per pixel
+        x = self.conv3(x)
+        n, c, h, w = x.size()  # n=batch size, c=number of classes, h=height, w=width
+        x = x.permute(0, 2, 3, 1).contiguous()  # rearrange to [n, h, w, c]
+        x = F.softmax(x.view(-1, c), dim=1)  # apply softmax on classes
+        x = x.view(n, h, w, c).permute(0, 3, 1, 2)  # reshape and rearrange back to original
+
+        return x
 
 
 

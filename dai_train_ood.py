@@ -48,38 +48,54 @@ class StreetHazardsDataset(Dataset):
             segmentation_mask_pil = Image.fromarray(segmentation_mask_uint8)
 
             # Resize both image and segmentation mask to 512x512
-            segmentation_mask_pil = segmentation_mask_pil.resize((512, 512), Image.NEAREST)
+            segmentation_mask_pil = segmentation_mask_pil.resize((256, 256), Image.NEAREST)
             segmentation_mask = torch.tensor(np.array(segmentation_mask_pil), dtype=torch.long)
 
             anomaly_mask_pil = Image.fromarray(anomaly_mask.astype(np.uint8) * 255)
-            anomaly_mask_pil = anomaly_mask_pil.resize((512, 512), Image.NEAREST)
+            anomaly_mask_pil = anomaly_mask_pil.resize((256, 256), Image.NEAREST)
             anomaly_mask = torch.tensor(np.array(anomaly_mask_pil), dtype=torch.float32).unsqueeze(0) / 255
 
         return image, segmentation_mask, anomaly_mask
 
 
-transform = transforms.Compose([
-    transforms.Resize((512, 512)),  # Resize to the input size required by PSPNet
-    transforms.ToTensor(),
-    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-])
 
-class PSPNetFeatureExtractor(nn.Module):
-    def __init__(self, encoder_name="resnet101", encoder_weights="imagenet"):
-        super(PSPNetFeatureExtractor, self).__init__()
+class PSPNetResNet101(nn.Module):
+    def __init__(self, dropout_rate=0.5):
+        super(PSPNetResNet101, self).__init__()
         self.model = smp.PSPNet(
-            encoder_name=encoder_name, 
-            encoder_weights=encoder_weights, 
-            classes=13,  # Number of classes including anomaly class
-            activation=None,
-            upsampling=8  # Adjust upsampling to match input and output resolution
+            encoder_name="resnet101", 
+            encoder_weights="imagenet", 
+            classes=13, 
+            activation=None
         )
-        self.model.segmentation_head = nn.Identity()
+        self.dropout = nn.Dropout(dropout_rate)
 
     def forward(self, x):
+        # Extract features using the encoder
         features = self.model.encoder(x)
+
+        # Apply dropout to the highest resolution features only
+        if len(features) > 0 and isinstance(features[-1], torch.Tensor):
+            features[-1] = self.dropout(features[-1])
+
+        # Decode features and get logits
         x = self.model.decoder(*features)
-        # Upsampling is handled within the PSPNet, no need for an additional Upsample layer
+        logits = self.model.segmentation_head(x)
+        return logits
+
+class UnetPlusPlusFeatureExtractor(nn.Module):
+    def __init__(self, encoder_name="resnet34", encoder_weights="imagenet", classes=13):
+        super(UnetPlusPlusFeatureExtractor, self).__init__()
+        self.model = smp.UnetPlusPlus(
+            encoder_name=encoder_name, 
+            encoder_weights=encoder_weights, 
+            classes=classes, 
+            activation=None
+        )
+
+    def forward(self, x):
+        # Unet++ maintains spatial resolution in its output
+        x = self.model(x)
         return x
 
 
@@ -101,15 +117,6 @@ def compute_target_belief(segmentation_masks, anomaly_class_idx):
 def get_segmentation_prediction(logits):
     return torch.argmax(logits, dim=1)
 
-""" 
-def compute_belief_from_segmentation(logits):
-    # Convert logits to probabilities for each pixel
-    probabilities = torch.softmax(logits, dim=1)
-    # Compute belief for each pixel being anomalous
-    anomaly_class_idx = logits.shape[1] - 1  # Last class as anomaly
-    beliefs = probabilities[:, anomaly_class_idx, :, :]
-    return beliefs
-"""
 
 def compute_belief_from_segmentation(segmentation_logits):
     """
@@ -126,6 +133,7 @@ def compute_belief_from_segmentation(segmentation_logits):
     return probabilities
 
 
+
 def compute_actual_efe(current_belief, target_belief):
     """
     Compute the actual expected free energy (EFE) for pixel-wise anomaly detection.
@@ -135,22 +143,27 @@ def compute_actual_efe(current_belief, target_belief):
     - target_belief (torch.Tensor): The target belief state. Shape: [batch_size, H, W] (binary mask)
 
     Returns:
-    - torch.Tensor: The EFE value for each pixel.
+    - torch.Tensor: The EFE map for each pixel. Shape: [batch_size, 1, H, W]
     """
     # Expanding target_belief to match the shape of current_belief
-    target_belief_expanded = target_belief.unsqueeze(1).expand_as(current_belief)
-    
+    target_belief_expanded = target_belief.unsqueeze(1).float().expand_as(current_belief)
+
     # Convert current_belief to log probabilities
     log_current_belief = torch.log_softmax(current_belief, dim=1)
-    
+
     # Compute pixel-wise KL divergence
     kl_div = nn.KLDivLoss(reduction='none')
     efe = kl_div(log_current_belief, target_belief_expanded)
-    
+
+    # Mask out regions belonging to the anomaly class
+    anomaly_mask = target_belief == 12  # Assuming the anomaly class index is 12 (modify as needed)
+    anomaly_mask = anomaly_mask.unsqueeze(1).float().expand_as(efe)
+    efe = efe * torch.logical_not(anomaly_mask)
+
     # Summing over the class dimension
     efe = efe.sum(dim=1)
 
-    return efe.mean(dim=[1, 2])
+    return efe.unsqueeze(1)
 
 
 
@@ -166,22 +179,27 @@ def compute_multiclass_entropy(probabilities):
     """
     return -torch.sum(probabilities * torch.log(probabilities + 1e-10), dim=1)
 
+
 def compute_multiclass_free_energy(q, Q_actions_batch):
     """
-    Compute the free energy for multi-class policy distributions in pixel-wise context.
-    
+    Compute the free energy for multi-class policy distributions.
+
     Parameters:
-    - q (torch.Tensor): Policy distributions for the current state. Shape: [batch_size, num_classes, H, W]
-    - Q_actions_batch (torch.Tensor): Prior distributions for actions. Shape: [batch_size, num_classes, H, W]
-    
+    - q (torch.Tensor): Policy distributions for the current state.
+    - Q_actions_batch (torch.Tensor): Prior distributions for actions.
+
     Returns:
-    - torch.Tensor: Free energy values for the policy distributions, averaged over all pixels.
+    - torch.Tensor: Free energy values for the policy distributions.
     """
-    entropy_q = -torch.sum(q * torch.log(q + 1e-10), dim=1)
+    # Reshape q and Q_actions_batch if necessary
+    if q.shape != Q_actions_batch.shape:
+        q = q.permute(0, 3, 1, 2)  # Change from [B, H, W, C] to [B, C, H, W] if necessary
+        Q_actions_batch = Q_actions_batch.unsqueeze(-1).unsqueeze(-1).expand_as(q)  # Expand Q_actions_batch to match q's shape
+
+    entropy_q = compute_multiclass_entropy(q)
     kl_term = torch.sum(q * torch.log((q + 1e-10) / (Q_actions_batch + 1e-10)), dim=1)
-    
-    free_energy = -entropy_q - kl_term
-    return free_energy.mean(dim=[1, 2])
+    return -entropy_q - kl_term
+
 
 
 def policy_loss(F):
@@ -244,27 +262,6 @@ def compute_iou(preds, labels, num_classes=13):
 
     return np.nanmean(iou_list)
 
-"""
-def update_belief(current_belief, observation, belief_update_network):
-
-    Update the belief state based on new observation using the belief update network.
-
-    Parameters:
-    - current_belief (torch.Tensor): The current belief state. Shape: [batch_size, num_classes, H, W]
-    - observation (torch.Tensor): The new observation to update the belief. Shape: [batch_size, num_classes, H, W]
-    - belief_update_network (nn.Module): The network to update beliefs.
-
-    Returns:
-    - torch.Tensor: The updated belief state. Shape: [batch_size, num_classes, H, W]
-
-    # Ensure observation is correctly shaped
-    if observation.dim() > 4:
-        observation = observation.view(observation.shape[0], -1, observation.shape[-2], observation.shape[-1])
-
-    updated_belief = belief_update_network(observation)
-    combined_belief = 0.7 * current_belief + 0.3 * updated_belief
-    return combined_belief
-    """
 
 def update_belief(current_belief, observation, belief_update_network):
     """
@@ -287,24 +284,32 @@ def update_belief(current_belief, observation, belief_update_network):
 
 if __name__ == "__main__":
 
+    # Set default CUDA device
+    # if torch.cuda.is_available():
+        # torch.cuda.set_device(1)  # Set default device in case of multiple GPUs
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
     # Hyperparameters
     hidden_dim = 356  # Adjusted for task complexity
     learning_rate = 0.005
-    num_epochs = 10
+    num_epochs = 1
     num_classes = 13  # 13 classes including the anomaly class (13th)
     # Assuming the feature extractor outputs a feature vector of size 2048
-    input_dim = 512  # Output dimension of your feature extractor
-    output_dim_belief = num_classes  # 12 normal classes + 1 anomaly clas
-    input_dim_efe = num_classes * 2  # 26 for 13 classes
-
+    # H = 512
+    H = 256
+    W = 256
+    # W = 512
+    output_dim_belief = num_classes  # 12 normal classes + 1 anomaly class, might be incorrect
+    input_dim_efe = num_classes * 2  # 26 for 13 classes might be incorrect
+    
     # Initialize feature extractor with PSPNet for high-resolution feature extraction
-    feature_extractor = PSPNetFeatureExtractor(encoder_name="resnet101", encoder_weights="imagenet").to(device)
+    # feature_extractor = PSPNetFeatureExtractor(encoder_name="resnet101", encoder_weights="imagenet").to(device) # alternate
+    feature_extractor = UnetPlusPlusFeatureExtractor(encoder_name="resnet34", encoder_weights="imagenet").to(device)
+    # decided to use Unet++ instead to maintain spatial resolution
 
     # Initialize belief update network with adjusted input dimension
-    # input_dim = 512, hidden_dim = 356, output_dim = 13
-    belief_update = BeliefUpdateNetwork(input_channels=input_dim, hidden_channels=hidden_dim, output_channels=output_dim_belief).to(device)
+    # input_dim = 13, hidden_dim = 356, output_dim = 13
+    belief_update = BeliefUpdateNetwork(input_channels=num_classes, hidden_channels=hidden_dim, output_channels=output_dim_belief).to(device)
 
     # Initialize policy network for multi-class decision-making
     # input_dim = 13, hidden_dim = 356, output_dim = 13
@@ -313,6 +318,14 @@ if __name__ == "__main__":
     # Initialize bootstrapped EFE network for multi-class EFE calculation
     # input_dim = 13, hidden_dim = 356
     efe_network = BootstrappedEFENetwork(input_channels=input_dim_efe, hidden_channels=hidden_dim).to(device)
+    torch.cuda.empty_cache()
+    if torch.cuda.device_count() > 1:
+        print("Let's use", torch.cuda.device_count(), "GPUs!")
+        feature_extractor = nn.DataParallel(feature_extractor).to(device)
+        belief_update = nn.DataParallel(belief_update).to(device)
+        policy_network = nn.DataParallel(policy_network).to(device)
+        efe_network = nn.DataParallel(efe_network).to(device)
+ 
 
     # Define optimizers for policy and EFE networks
     optimizer_policy = optim.AdamW(policy_network.parameters(), lr=learning_rate, weight_decay=0.01)
@@ -320,7 +333,7 @@ if __name__ == "__main__":
 
     # Define transformations and create datasets
     transform = transforms.Compose([
-        transforms.Resize((512, 512)),
+        transforms.Resize((256, 256)),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
     ])
@@ -330,7 +343,7 @@ if __name__ == "__main__":
     dataset = StreetHazardsDataset(image_dir, annotation_dir, transform=transform)
 
     # Create data loader
-    batch_size = 8 # changing for testing
+    batch_size = 2 # changing for testing
     data_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
     # Add DataLoader for the validation dataset
@@ -350,13 +363,13 @@ if __name__ == "__main__":
     print("Q shape:", Q.shape)
     
 
-    torch.autograd.set_detect_anomaly(True)
+    # torch.autograd.set_detect_anomaly(True)
 
     # Proceed to the training and validation loop...
     # validation and training loop
     # Hyperparameters for updating Q_actions
     learning_adjustment = 0.01 
-    # Proceed to the training and validation loop...
+
     
     for epoch in range(num_epochs):
         # Set models to training mode
@@ -365,9 +378,10 @@ if __name__ == "__main__":
         policy_network.train()
         efe_network.train()
 
-        # Initialize Q_actions with a uniform distribution at the start of each epoch
-        Q_actions_epoch = torch.full((num_classes,), fill_value=1.0 / num_classes, device=device)
-      
+        # Initialize Q_actions with a uniform distribution for each pixel at the start of each epoch
+        Q_actions_epoch = torch.full((batch_size, num_classes, H, W), fill_value=1.0 / num_classes, device=device)
+
+        
 
         for batch_idx, (images, segmentation_masks, anomaly_masks) in enumerate(data_loader):
             images = images.to(device)  # [batch_size, 3, H, W]
@@ -375,37 +389,52 @@ if __name__ == "__main__":
             anomaly_masks = anomaly_masks.to(device)  # [batch_size, 1, H, W]
             print("images shape", images.shape, "segmentation_masks shape", segmentation_masks.shape, "anomaly_masks shape", anomaly_masks.shape)
             segmentation_logits = feature_extractor(images)  # [batch_size, num_classes, H, W]
-            print("segmentation_logits shape", segmentation_logits.shape)
+            print("segmentation_logits shape", segmentation_logits.shape) # ([8, 13, 512, 512]) PSP: [8, 512, 64, 64]
             current_belief = compute_belief_from_segmentation(segmentation_logits)  # [batch_size, num_classes, H, W]
-            print("current_belief shape", current_belief.shape)
+            print("current_belief shape", current_belief.shape) # ([8, 13, 512, 512]) PSP: [8, 512, 64, 64]
 
             updated_belief = update_belief(current_belief, segmentation_logits, belief_update)  # [batch_size, num_classes, H, W]
-            print("updated_belief shape", updated_belief.shape) # updated_belief shape torch.Size([32, 32, 13]) should this be [32,13, H, W] ? 
+            print("updated_belief shape", updated_belief.shape) # updated_belief shape [8, 13, 512, 512]
             # Compute the target belief for multi-class classification
-            target_belief = compute_target_belief(segmentation_masks, num_classes) # Tensor shape: [batch_size, num_classes]
-            print("target_belief shape", target_belief.shape) # target_belief shape torch.Size([32, 512])
+            target_belief = compute_target_belief(segmentation_masks, num_classes) # Tensor shape: [batch_size, H, W]
+            print("target_belief shape", target_belief.shape) # target_belief shape torch.Size([8, 512, 512])
             # Calculate policy network output
-            q = policy_network(updated_belief) # Tensor shape: [batch_size, num_classes]
-
+            q = policy_network(updated_belief) # Tensor shape: [batch_size, num_classes], Intended Shape: [batch_size, num_classes, H, W]
+            print("q shape", q.shape)
             # Concatenate belief state and action for EFE input
-            input_to_efe = torch.cat([updated_belief, q], dim=1) # Tensor shape: [batch_size, num_classes * 2]
-            print("input_to_efe shape", input_to_efe.shape)
+            input_to_efe = torch.cat([updated_belief, q], dim=1) # Tensor shape: [batch_size, num_classes * 2, H, W]
+            print("input_to_efe shape", input_to_efe.shape) # ([8, 26, 512, 512])
             # Calculate the expected free energy
-            G_phi = efe_network(input_to_efe) # Tensor shape: [batch_size, 1]
-            print("G_phi shape", G_phi.shape)
+            G_phi = efe_network(input_to_efe) # Tensor shape: [batch_size, 1, H, W]
+            print("G_phi shape", G_phi.shape) # [8, 1, 512, 512])
 
-            G = compute_actual_efe(updated_belief, target_belief) # Tensor shape: [batch_size, 1]
-            print("G shape", G.shape)
+            G = compute_actual_efe(updated_belief, target_belief) # Tensor shape: [batch_size, 1, H, W]
+            print("G shape", G.shape) # shape [batch_size] = [8]
             # Update Q_actions based on the actions chosen
-            action_chosen = torch.argmax(q, dim=1)
-            for action in range(num_classes):
-                Q_actions_epoch[action] += learning_adjustment * (action_chosen == action).float().mean()
 
-            # Normalize Q_actions to maintain a valid probability distribution
-            Q_actions_batch = torch.nn.functional.normalize(Q_actions_epoch.unsqueeze(0).repeat(images.size(0), 1), p=1, dim=1)
-            print("Q_actions_batch.shape", Q_actions_batch.shape)
+            print("Q_actions_epoch shape", Q_actions_epoch.shape) # [num_classes] Intended Shape: [batch_size, num_classes, H, W]
+            # Update Q_actions_epoch based on prior belief state
+            for i, action in enumerate(range(num_classes)):
+                # Select pixels belonging to the current action class
+                action_mask = (target_belief == action).float()
+                
+                # Extract class probabilities from prior belief
+                # updated_belief shape torch.Size([8, 13, 512, 512])
+                action_probs = updated_belief[:, i, :, :]
+
+                # Assign higher Q-values to pixels with higher class probabilities
+                Q_actions_epoch[:, i, :, :] = torch.where(action_mask > 0, action_probs * learning_adjustment, Q_actions_epoch[:, i, :, :])
+
+
+            # Normalize Q_actions_batch to get probability distribution for each pixel
+            print("Q_actions_epoch shape", Q_actions_epoch.shape) # [num_classes] Intended Shape: [batch_size, num_classes, H, W]
+            Q_actions_batch = torch.nn.functional.normalize(Q_actions_epoch, p=1, dim=1) # IndexError: Dimension out of range (expected to be in range of [-1, 0], but got 1)
+
+
+            print("Q_actions_batch.shape", Q_actions_batch.shape) # [num_classes] Intended Shape for Pixel-wise Decisions: [batch_size, num_classes, H, W]
+            print("q shape", q.shape) # [num_classes]
             # Calculate free energy for the policy network
-            F = compute_multiclass_free_energy(q, Q_actions_batch)
+            F = compute_multiclass_free_energy(q, Q_actions_batch) # IndexError: Dimension out of range (expected to be in range of [-1, 0], but got 1)
             print("F shape", F.shape)
             # Compute the total loss
             loss_policy = policy_loss(F)
@@ -417,6 +446,7 @@ if __name__ == "__main__":
             # Backpropagation
             optimizer_policy.zero_grad()
             optimizer_efe.zero_grad()
+            print("zeroed out gradients now its time for backwards")
             total_loss.backward()
 
             # Gradient clipping
@@ -424,6 +454,7 @@ if __name__ == "__main__":
             torch.nn.utils.clip_grad_norm_(efe_network.parameters(), max_norm=1.0)
 
             # Optimizer step
+            print("step")
             optimizer_policy.step()
             optimizer_efe.step()
 
