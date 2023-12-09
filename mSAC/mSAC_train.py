@@ -3,6 +3,9 @@ import os
 import torch
 from mSAC_agent import Agent
 from replay_buffer import ReplayBuffer
+import cProfile
+# import pstats
+
 
 # Set default CUDA device
 if torch.cuda.is_available():
@@ -41,7 +44,9 @@ def train_mSAC(env, num_agents, max_episodes, max_timesteps, batch_size):
         for _ in range(num_runs):
             states = env.reset()
             done = False
+            eval_time_step = 0 
             while not done:
+                # print("eval_time_step", eval_time_step)
                 action, _ = agent.select_action(states[agent_idx], agent_idx)  # Select action for the specific agent
 
                 # Create a list of actions for all agents, with dummy actions for other agents
@@ -51,11 +56,15 @@ def train_mSAC(env, num_agents, max_episodes, max_timesteps, batch_size):
                 next_states, rewards, done, _ = env.step(actions)
                 states = next_states
                 total_reward += rewards[agent_idx]  # Accumulate reward for the specific agent
+                done = env.check_done(max_timesteps=max_timesteps, current_timestep=eval_time_step)
+                eval_time_step = eval_time_step + 1
+
         avg_reward = total_reward / num_runs
         return avg_reward
 
 
 
+    profiler = cProfile.Profile()
 
     # Training Loop
     torch.autograd.set_detect_anomaly(True)
@@ -65,29 +74,37 @@ def train_mSAC(env, num_agents, max_episodes, max_timesteps, batch_size):
         total_rewards = [0 for _ in range(num_agents)]
 
         for t in range(max_timesteps):
+            print("t", t)
             actions = []
             for i, agent in enumerate(agents):
                 action, _ = agent.select_action(states[i], i)  # Corrected call to select_action, no more ego vehicle
                 actions.append(action)
 
             # print(f"mSAC_train.py:Training loop: First action element: {actions[0]}, Type: {type(actions[0])}")
+            # profiler.enable()  # Start profiling
             next_states, rewards, done, _ = env.step(actions)
+            # profiler.disable()  # Stop profiling
+            # stats = pstats.Stats(profiler).sort_stats('tottime')
+            # stats.print_stats()
+            # print("pushing to replay buffer")
             replay_buffer.push(states, actions, rewards, next_states, [done] * num_agents)
-
+             #print("pushed to rb")
             if len(replay_buffer) > batch_size:
+                # print("replay buffer greater than batch size")
                 for i in range(num_agents):
                     samples = replay_buffer.sample(batch_size, i)
                     agents[i].update_parameters(samples, i)
-
+            # print("finished updating parameters")
             states = next_states
             for i in range(num_agents):
                 total_rewards[i] += rewards[i]
-
+            # print("updated states and total rewards")
             if done:
                 break
 
         if episode % 100 == 0:
             for i, agent in enumerate(agents):
+                # print("evaluating agent")
                 avg_reward = evaluate_agent(agent, env, i)
                 print(f"Agent {i}, Episode {episode}, Evaluation Average Reward: {avg_reward}")
                 save_model(agent, episode, i)

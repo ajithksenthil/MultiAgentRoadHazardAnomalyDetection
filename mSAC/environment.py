@@ -372,22 +372,24 @@ class CarlaEnv:
 
     # environment interaction methods
 
-    def create_hazardous_scenario(self):
+    def create_hazardous_scenario(self, num_hazards):
         """
         Create a hazardous scenario in the environment.
         This function will be called from the experiments script.
         """
         # Randomly select a type of hazard to create
         hazard_type = random.choice(['static_obstacle', 'dynamic_event', 'weather_change'])
+        hazard_type_list = []
+        for i in range(num_hazards): 
+            if hazard_type == 'static_obstacle':
+                self.create_static_obstacle()
+            elif hazard_type == 'dynamic_event':
+                self.create_dynamic_event()
+            elif hazard_type == 'weather_change':
+                self.change_weather_conditions()
+            hazard_type_list.append(hazard_type)
 
-        if hazard_type == 'static_obstacle':
-            self.create_static_obstacle()
-        elif hazard_type == 'dynamic_event':
-            self.create_dynamic_event()
-        elif hazard_type == 'weather_change':
-            self.change_weather_conditions()
-
-        return hazard_type
+        return hazard_type, hazard_type_list
 
     def create_static_obstacle(self):
         """

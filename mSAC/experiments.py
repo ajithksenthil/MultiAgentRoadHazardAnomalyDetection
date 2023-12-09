@@ -8,6 +8,7 @@ import seaborn as sns
 import pandas as pd
 from environment import CarlaEnv
 from mSAC_train import train_mSAC
+from mSAC_agent import Agent
 import torch
 
 
@@ -15,80 +16,6 @@ import torch
 if torch.cuda.is_available():
     torch.cuda.set_device(1)  # Set default device in case of multiple GPUs
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-def run_experiment(client, traffic_manager, num_agents, num_episodes):
-    env = CarlaEnv(client, traffic_manager, num_agents)
-
-    # Train mSAC agents
-    agents = train_mSAC(env, num_agents, num_episodes, max_timesteps=5, batch_size=64)
-    torch.cuda.empty_cache()
-    print("finished training mSAC")
-
-    # Data storage for visualization
-    episode_data = []
-    all_actions = []  # Store all actions here
-
-    # Simulation loop
-    max_timesteps_per_episode = 5  # Set this based on your simulation requirements
-
-    for episode in range(num_episodes):
-        hazard_type = env.create_hazardous_scenario()  # Create a hazardous scenario
-        states = env.reset()  # states shape: [num_agents, state_size]
-        total_rewards = [0 for _ in range(num_agents)]
-        episode_collisions = 0
-        hazard_encounters = 0
-        done = False
-        episode_actions = []  # Track actions for this episod
-        current_timestep = 0  # Initialize timestep counter for this episode
-
-        while not done:
-            actions = []
-            for idx, agent in enumerate(agents):
-                agent_state = states[idx]  # Get the state for this specific agent
-                action, _ = agent.select_action(agent_state, idx)
-                actions.append(action)
-                episode_actions.append(action.tolist())  # Store actions
-
-            next_states, rewards, done, info = env.step(actions)
-            states = next_states
-
-            # Update metrics from info
-            episode_collisions += info['collisions']
-            hazard_encounters += info['hazard_encounters']
-
-            # Accumulate rewards
-            for i, reward in enumerate(rewards):
-                total_rewards[i] += reward
-
-            # Increment timestep counter
-            current_timestep += 1
-
-            # Check if max timesteps reached or other termination conditions met
-            done = done or env.check_done(max_timesteps=max_timesteps_per_episode, current_timestep=current_timestep)
-
-        all_actions.append(episode_actions)  # Store episode actions
-        episode_data.append({
-            "episode": episode + 1,
-            "hazard_type": hazard_type,
-            "rewards": sum(total_rewards),
-            "collisions": episode_collisions,
-            "hazard_encounters": hazard_encounters
-        })
-        print(f"Episode: {episode+1}, Total Rewards: {total_rewards}, Collisions: {episode_collisions}, Hazard Encounters: {hazard_encounters}")
-
-    
-    print("finished simulation")
-
-    # Save the episode data to a CSV file
-    df = pd.DataFrame(episode_data)
-    df.to_csv('episode_data.csv', index=False)
-
-    # Data Visualization
-    print("data visualization")
-    visualize_data(df)
-    visualize_actions(all_actions)  # Visualize actions
-    print("finished data visualization, cleanup")
-    env.cleanup()
 
 
 def visualize_actions(all_actions, save_path='visualization_output'):
@@ -181,14 +108,133 @@ def visualize_data(df):
     plt.savefig('hazard_encounters_by_type.png')
     plt.show()
 
+# use this if you did not use Data Parallel: 
+""" 
+def load_model(agent_idx, model_dir, model_type, episode):
+    model_path = os.path.join(model_dir, f"{model_type}_agent_{agent_idx}_episode_{episode}.pth")
+    model_state_dict = torch.load(model_path, map_location=torch.device('cpu'))
+    return model_state_dict
+"""
+
+def load_model(agent_idx, model_dir, model_type, episode):
+    model_path = os.path.join(model_dir, f"{model_type}_agent_{agent_idx}_episode_{episode}.pth")
+    model_state_dict = torch.load(model_path, map_location=torch.device('cpu'))
+
+    # Add 'module.' prefix to each key
+    new_state_dict = {'module.' + k: v for k, v in model_state_dict.items()}
+    return new_state_dict
+
+
+def run_experiment(client, traffic_manager, num_agents, num_episodes, num_hazards, train_mode=True):
+    env = CarlaEnv(client, traffic_manager, num_agents)
+
+    # Train mSAC agents
+    if train_mode: 
+        agents = train_mSAC(env, num_agents, num_episodes, max_timesteps=5, batch_size=64)
+        torch.cuda.empty_cache()
+        print("finished training mSAC")
+    else: 
+        # load state dicts from models folder
+        # Load pre-trained models
+        load_episode = num_episodes
+        print("loading agents from episode {}".format(load_episode))
+        agents = []
+        model_dir = "./models"
+        for i in range(num_agents):
+            # Initialize the agent with the same parameters as used during training
+            agent = Agent(state_dim=env.state_size, action_dim=env.action_size, num_agents=num_agents, batch_size=64, hidden_dim=256)
+
+            # Load actor and critic state dictionaries
+            actor_state_dict = load_model(i, model_dir, "actor", load_episode)
+            critic_state_dict = load_model(i, model_dir, "critic", load_episode)
+
+            # Update the models with the loaded state dictionaries
+            agent.actors[i].load_state_dict(actor_state_dict)
+            agent.critics[i].load_state_dict(critic_state_dict)
+
+            agents.append(agent)
+
+
+
+
+    # Data storage for visualization
+    episode_data = []
+    all_actions = []  # Store all actions here
+
+    # Simulation loop
+    max_timesteps_per_episode = 5  # Set this based on your simulation requirements
+
+    for episode in range(num_episodes):
+        hazard_type, hazard_type_list = env.create_hazardous_scenario(num_hazards=num_hazards)  # Create a hazardous scenario, TODO figure out how to visualize multiple hazards per episode
+        states = env.reset()  # states shape: [num_agents, state_size]
+        total_rewards = [0 for _ in range(num_agents)]
+        episode_collisions = 0
+        hazard_encounters = 0
+        done = False
+        episode_actions = []  # Track actions for this episod
+        current_timestep = 0  # Initialize timestep counter for this episode
+
+        while not done:
+            actions = []
+            for idx, agent in enumerate(agents):
+                agent_state = states[idx]  # Get the state for this specific agent
+                action, _ = agent.select_action(agent_state, idx)
+                actions.append(action)
+                # episode_actions.append(action.tolist())  # Store actions
+                episode_actions.append({k: v.tolist() if hasattr(v, 'tolist') else v for k, v in action.items()})
+
+
+            next_states, rewards, done, info = env.step(actions)
+            states = next_states
+
+            # Update metrics from info
+            episode_collisions += info['collisions']
+            hazard_encounters += info['hazard_encounters']
+
+            # Accumulate rewards
+            for i, reward in enumerate(rewards):
+                total_rewards[i] += reward
+
+            # Increment timestep counter
+            current_timestep += 1
+
+            # Check if max timesteps reached or other termination conditions met
+            done = done or env.check_done(max_timesteps=max_timesteps_per_episode, current_timestep=current_timestep)
+
+        all_actions.append(episode_actions)  # Store episode actions
+        episode_data.append({
+            "episode": episode + 1,
+            "hazard_type": hazard_type,
+            "rewards": sum(total_rewards),
+            "collisions": episode_collisions,
+            "hazard_encounters": hazard_encounters
+        })
+        print(f"Episode: {episode+1}, Total Rewards: {total_rewards}, Collisions: {episode_collisions}, Hazard Encounters: {hazard_encounters}")
+
+    
+    print("finished simulation")
+
+    # Save the episode data to a CSV file
+    df = pd.DataFrame(episode_data)
+    df.to_csv('episode_data.csv', index=False)
+
+    # Data Visualization
+    print("data visualization")
+    visualize_data(df)
+    visualize_actions(all_actions)  # Visualize actions
+    print("finished data visualization, cleanup")
+    env.cleanup()
+
+
 
 if __name__ == '__main__':
     client = carla.Client('localhost', 2000)
-    client.set_timeout(10.0)
+    # client.set_timeout(10.0)
+    client.set_timeout(10000)  # Set timeout to 10000 ms (10 seconds)
     traffic_manager = client.get_trafficmanager(8000)
     traffic_manager.set_synchronous_mode(True)
 
-    run_experiment(client, traffic_manager, num_agents=5, num_episodes=100)
+    run_experiment(client, traffic_manager, num_agents=5, num_episodes=100, num_hazards=10, train_mode=False)
 
 
 # each script and their key roles in the context of the mSAC implementation for hazard avoidance in CARLA:
