@@ -12,7 +12,29 @@ if torch.cuda.is_available():
     torch.cuda.set_device(1)  # Set default device in case of multiple GPUs
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+import json
+
+class TrainingLogger:
+    def __init__(self, file_name):
+        self.file_name = file_name
+        self.data = []
+
+    def log(self, episode, timestep, rewards, avg_reward=None):
+        self.data.append({
+            "episode": episode,
+            "timestep": timestep,
+            "rewards": rewards,
+            "average_reward": avg_reward
+        })
+
+    def save(self):
+        with open(self.file_name, 'w') as f:
+            json.dump(self.data, f, indent=4)
+
+
 def train_mSAC(env, num_agents, max_episodes, max_timesteps, batch_size):
+    # Initialize the logger
+    logger = TrainingLogger("training_log.json")
 
     # reduce batch size 
     batch_size = batch_size 
@@ -99,6 +121,7 @@ def train_mSAC(env, num_agents, max_episodes, max_timesteps, batch_size):
             for i in range(num_agents):
                 total_rewards[i] += rewards[i]
             # print("updated states and total rewards")
+
             if done:
                 break
 
@@ -108,6 +131,9 @@ def train_mSAC(env, num_agents, max_episodes, max_timesteps, batch_size):
                 avg_reward = evaluate_agent(agent, env, i)
                 print(f"Agent {i}, Episode {episode}, Evaluation Average Reward: {avg_reward}")
                 save_model(agent, episode, i)
+
+        logger.log(episode, t, total_rewards, avg_reward)
+
         torch.cuda.empty_cache()
 
     print("finished epochs now saving final max model")
@@ -116,6 +142,8 @@ def train_mSAC(env, num_agents, max_episodes, max_timesteps, batch_size):
         save_model(agent, max_episodes, i)
 
     print("returning agents")
+    # Save the logged data
+    logger.save()
 
     return agents
 

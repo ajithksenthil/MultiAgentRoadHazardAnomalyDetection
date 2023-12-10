@@ -11,6 +11,8 @@ parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(parent_dir)
 
 from gcp_baseline_train import ResNetBinaryClassifier
+from hazard_detection import HazardDetectionSystem as hazard_detection_system
+from baseline_train import PSPNetResNet101
 import torch
 import torch.nn as nn
 import torchvision.transforms as transforms
@@ -25,12 +27,34 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 class CarlaEnv:
     def __init__(self, client, traffic_manager, num_agents):
         self.num_agents = num_agents
+        self.spawned_obstacles = []  # List to keep track of spawned obstacles
+        self.spawned_pedestrians = []  # List to keep track of spawned pedestrians
         # Define the transform for preprocessing the input image
+        # use this for ResNet Binary Classifier or DAI binary classifier
+        # """
         self.transform = transforms.Compose([
             transforms.Resize((224, 224)),
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
         ])
+        # """
+
+        # use this for max logit
+        """
+        self.transform = transforms.Compose([
+            transforms.Resize((512, 512)),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        ])
+        # """
+        # use this for DAI ood
+        """
+        self.transform = transforms.Compose([
+        transforms.Resize((256, 256)),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        ])
+        #"""
 
         # Initialize data structures for storing individual vehicle states
         self.anomaly_flags = [False] * num_agents
@@ -38,7 +62,7 @@ class CarlaEnv:
 
         # Initialize CARLA world using provided client and traffic manager
         self.world = client.get_world()
-
+        self.world.set_pedestrians_cross_factor(1.0) # allow pedestrians to cross 100%
         # Configure Traffic Manager using provided traffic manager
         self.traffic_manager_api = TrafficManagerAPI(traffic_manager, world=self.world)
 
@@ -50,6 +74,20 @@ class CarlaEnv:
         self.hazard_detection_model = self.hazard_detection_model.to('cuda:1')
         self.hazard_detection_model.eval()
 
+
+        # initialize hazard detection using OOD max logit
+        # Initialize the max-logit anomaly detection model
+        # """
+        self.anomaly_detection_model = PSPNetResNet101().to('cuda:1')
+        
+        # Load the trained model
+        """
+        model_path = '../saved_models/final_model.pth'  # Adjust the path as needed
+        self.anomaly_detection_model.load_state_dict(torch.load(model_path, map_location='cuda:1'))
+        self.anomaly_detection_model = nn.DataParallel(self.anomaly_detection_model, device_ids=[1, 0])
+        self.anomaly_detection_model = self.anomaly_detection_model.to('cuda:1')
+        self.anomaly_detection_model.eval()
+        # """
         # Vehicle and sensor setup
         self.camera_sensor_data = {}  # Dictionary to store camera data for each vehicle
         self.setup_vehicle_and_sensors(num_agents=num_agents)
@@ -88,7 +126,9 @@ class CarlaEnv:
             vehicle = None
             for spawn_point in spawn_points:
                 vehicle = self.world.try_spawn_actor(vehicle_bp, spawn_point)
+                
                 if vehicle is not None:
+                    vehicle.set_autopilot(True)  # Enable autopilot
                     break
 
             if not vehicle:
@@ -118,6 +158,69 @@ class CarlaEnv:
     def on_collision(self, event, vehicle_id):
         # Increment the collision counter for this vehicle
         self.collision_counts[vehicle_id] += 1
+        # vehicle_index = self.vehicle_id_to_index[vehicle_id]
+        # vehicle = self.vehicles[vehicle_index]
+
+    def maintain_vehicles(self):
+        """Check and respawn vehicles as needed."""
+        blueprint_library = self.world.get_blueprint_library()
+        vehicle_bp = blueprint_library.filter('model3')[0]
+        spawn_points = self.world.get_map().get_spawn_points()
+
+        for idx, vehicle in enumerate(self.vehicles):
+            if not self.is_vehicle_valid(vehicle):
+                print(f"Vehicle {idx} is no longer valid. Respawning...")
+                self.respawn_vehicle(vehicle_bp, spawn_points, idx)
+
+    def is_vehicle_valid(self, vehicle):
+        """Check if the vehicle is still present in the simulation."""
+        return vehicle.is_alive
+    
+    def respawn_vehicle(self, vehicle_bp, spawn_points, vehicle_index):
+        """Respawn a vehicle at a random spawn point and reattach sensors."""
+        # Destroy the old vehicle and sensors if they still exist
+        old_vehicle = self.vehicles[vehicle_index]
+        if old_vehicle is not None:
+            # Destroy sensors associated with this vehicle
+            if vehicle_index < len(self.camera_sensors) and self.camera_sensors[vehicle_index] is not None:
+                self.camera_sensors[vehicle_index].stop()
+                self.camera_sensors[vehicle_index].destroy()
+                self.camera_sensors[vehicle_index] = None
+            
+            if old_vehicle.id in self.collision_sensors:
+                self.collision_sensors[old_vehicle.id].stop()
+                self.collision_sensors[old_vehicle.id].destroy()
+                del self.collision_sensors[old_vehicle.id]
+
+
+        # Try to spawn a new vehicle
+        vehicle = None
+        for spawn_point in spawn_points:
+            vehicle = self.world.try_spawn_actor(vehicle_bp, spawn_point)
+            if vehicle is not None:
+                vehicle.set_autopilot(True)
+                break
+
+        if not vehicle:
+            raise RuntimeError("Failed to respawn vehicle: No free spawn points available.")
+
+        # Replace the old vehicle with the new one
+        self.vehicles[vehicle_index] = vehicle
+        self.vehicle_id_to_index[vehicle.id] = vehicle_index
+
+        # Reattach camera sensor
+        camera_bp = self.world.get_blueprint_library().find('sensor.camera.rgb')
+        camera_bp.set_attribute('sensor_tick', '0.1')
+        camera_transform = carla.Transform(carla.Location(x=1.5, z=2.4))  # Adjust as needed
+        camera_sensor = self.world.spawn_actor(camera_bp, camera_transform, attach_to=vehicle)
+        camera_sensor.listen(lambda image_data, vid=vehicle.id: self.camera_callback(image_data, vid))
+        self.camera_sensors[vehicle_index] = camera_sensor
+
+        # Reattach collision sensor and reset collision count
+        self.attach_collision_sensor(vehicle)
+        self.collision_counts[vehicle.id] = 0
+
+
 
     def get_state(self):
 
@@ -166,7 +269,7 @@ class CarlaEnv:
             traffic_manager_action = action['traffic_manager_control']
 
             # Apply vehicle control
-            self.apply_control_to_vehicle(vehicle, vehicle_control_action)
+            self.apply_control_to_vehicle(vehicle, vehicle_control_action, autopilot=True)
 
             # Perform traffic manager related actions if applicable
             self.perform_traffic_manager_control(vehicle, traffic_manager_action)
@@ -183,9 +286,10 @@ class CarlaEnv:
 
         # Check if the episode is done
         done = self.check_done()
-
+        
         # Get the next state for all vehicles
         next_states = self.get_state()
+        self.world.tick()
 
         # Gather info for data visualization
         collisions = self.get_collisions()
@@ -255,7 +359,7 @@ class CarlaEnv:
         }
         return default_action
    
-    def apply_control_to_vehicle(self, vehicle, control_actions):
+    def apply_control_to_vehicle(self, vehicle, control_actions, autopilot=True):
         """
         Apply control actions to a specific vehicle.
 
@@ -263,9 +367,16 @@ class CarlaEnv:
             vehicle (carla.Vehicle): The vehicle to control.
             control_actions (dict): Control actions including throttle, steer, and brake.
         """
-        throttle, steer, brake = control_actions['throttle'], control_actions['steer'], control_actions['brake']
-        control = carla.VehicleControl(throttle=throttle, steer=steer, brake=brake)
-        vehicle.apply_control(control)
+        vehicle.set_autopilot(True)
+        if autopilot != True: 
+            throttle, steer, brake = control_actions['throttle'], control_actions['steer'], control_actions['brake']
+            vehicle.set_autopilot(False)  # Disable autopilot before applying manual control
+            control = carla.VehicleControl(throttle=throttle, steer=steer, brake=brake)
+            vehicle.apply_control(control)
+            vehicle.set_autopilot(True)
+        else:
+            vehicle.set_autopilot(True)
+
     
     def perform_traffic_manager_control(self, vehicle, action):
         """
@@ -287,8 +398,9 @@ class CarlaEnv:
         # Adjust speed if necessary
         if speed_adjustment != 0:
             # Adjust the speed of the vehicle
-            desired_speed = vehicle.get_velocity().length() + speed_adjustment
-            self.traffic_manager_api.set_desired_speed(vehicle, desired_speed)
+            # desired_speed = vehicle.get_velocity().length() + speed_adjustment
+            desired_speed = 1.0
+            # self.traffic_manager_api.set_desired_speed(vehicle, desired_speed)
 
 
 
@@ -300,7 +412,9 @@ class CarlaEnv:
         camera_data = array[:, :, :3]  # Store RGB data
         self.camera_sensor_data[vehicle_id] = camera_data
         # Perform hazard detection
-        hazard_detected = self.detect_hazards_for_vehicle(self.vehicles[vehicle_index]) #MODIFIED switch to detect_hazard_for_vehicle
+        hazard_detected = self.detect_hazards_for_vehicle(self.vehicles[vehicle_index]) 
+        # hazard_detected = self.detect_dai_ood_hazards_for_vehicle(self.vehicles[vehicle_index]) 
+        # hazard_detected = self.detect_maxlogit_ood_hazards_for_vehicle(self.vehicles[vehicle_index])
 
         # Update the anomaly flag based on hazard detection for the specific vehicle
         # You might want to maintain a dictionary of anomaly flags for each vehicle
@@ -399,7 +513,9 @@ class CarlaEnv:
         obstacle_location = self.select_hazard_location()
 
         if self.is_location_clear(obstacle_location):
-            self.world.spawn_actor(obstacle_bp, carla.Transform(obstacle_location))
+            obstacle = self.world.spawn_actor(obstacle_bp, carla.Transform(obstacle_location))
+            if obstacle is not None:
+                self.spawned_obstacles.append(obstacle)
         else:
             print("Obstacle spawn location is not clear, skipping spawn.")
 
@@ -411,9 +527,12 @@ class CarlaEnv:
         pedestrian_location = self.select_hazard_location(offset_y=3)  # Slightly offset from the road
 
         if self.is_location_clear(pedestrian_location):
-            self.world.spawn_actor(pedestrian_bp, carla.Transform(pedestrian_location))
+            pedestrian = self.world.spawn_actor(pedestrian_bp, carla.Transform(pedestrian_location))
+            if pedestrian is not None:
+                self.spawned_pedestrians.append(pedestrian)
         else:
             print("Pedestrian spawn location is not clear, skipping spawn.")
+
 
     def select_hazard_location(self, offset_y=0):
         """
@@ -456,7 +575,20 @@ class CarlaEnv:
         )
         self.world.set_weather(weather)
 
-    
+    def remove_obstacles(self):
+        """Remove all spawned obstacles from the simulation."""
+        for obstacle in self.spawned_obstacles:
+            if obstacle.is_alive:
+                obstacle.destroy()
+        self.spawned_obstacles.clear()
+
+    def remove_pedestrians(self):
+        """Remove all spawned pedestrians from the simulation."""
+        for pedestrian in self.spawned_pedestrians:
+            if pedestrian.is_alive:
+                pedestrian.destroy()
+        self.spawned_pedestrians.clear()
+
     def reset(self):
         # Check if vehicles and sensors are already set up
         # if not self.vehicles or not self.camera_sensors:
@@ -475,6 +607,10 @@ class CarlaEnv:
         # self.reset_environment_state()
 
         # Return the initial state for the new episode
+        self.maintain_vehicles()
+        self.collision_counts = {key: 0 for key in self.collision_counts}
+        self.remove_obstacles()
+        self.remove_pedestrians()
         return self.get_state()
 
     def reset_vehicle_state(self, vehicle):
@@ -561,7 +697,56 @@ class CarlaEnv:
 
         return hazard_detected, vehicle_location
 
+    # use this for ood anomaly detection
+    def detect_dai_ood_hazards_for_vehicle(self, vehicle):
+        """
+        Detect hazards for a specific vehicle and get its location.
+        """
+        # Retrieve and process the image data
+        image_data = self.retrieve_camera_data(vehicle.id)
+        pil_image = Image.fromarray(image_data).convert('RGB')
+        input_tensor = self.transform(pil_image).unsqueeze(0).to('cuda:1')
 
+        # Forward pass through the hazard detection models
+        with torch.no_grad():
+            segmentation_logits = hazard_detection_system.feature_extractor(input_tensor)
+            updated_belief = hazard_detection_system.belief_update(segmentation_logits)
+            q = hazard_detection_system.policy_network(updated_belief)
+            input_to_efe = torch.cat([updated_belief, q], dim=1)
+            G_phi = hazard_detection_system.efe_network(input_to_efe)
+
+            # Detecting hazards based on updated belief (or other criteria as needed)
+            hazard_detected = (updated_belief >= 0.5).any()  # Adjust this logic based on how you define a 'hazard'
+
+        # Get the vehicle's location
+        vehicle_info_dict = self.get_vehicle_info(vehicle)
+        vehicle_location = vehicle_info_dict["location"]
+
+        return hazard_detected, vehicle_location
+
+
+    def detect_maxlogit_ood_hazards_for_vehicle(self, vehicle):
+        """
+        Detect hazards for a specific vehicle and get its location.
+        """
+        # Retrieve and process the image data
+        image_data = self.retrieve_camera_data(vehicle.id)
+        pil_image = Image.fromarray(image_data).convert('RGB')
+        input_tensor = self.transform(pil_image).unsqueeze(0).to('cuda:1')
+
+        # Forward pass through the anomaly detection model
+        with torch.no_grad():
+            outputs = self.anomaly_detection_model(input_tensor)
+            # Apply the max-logit strategy for anomaly detection
+            max_logits, _ = torch.max(outputs, dim=1)
+            hazard_detected = torch.any(max_logits > 0.5)  # Threshold for anomaly detection
+
+        # Get the vehicle's location
+        vehicle_info_dict = self.get_vehicle_info(vehicle)
+        vehicle_location = vehicle_info_dict["location"]
+
+        return hazard_detected, vehicle_location
+    
     def check_done(self, max_timesteps=None, current_timestep=None):
         """
         Check if the episode should be terminated.

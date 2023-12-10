@@ -125,7 +125,7 @@ def load_model(agent_idx, model_dir, model_type, episode):
     return new_state_dict
 
 
-def run_experiment(client, traffic_manager, num_agents, num_episodes, num_hazards, train_mode=True):
+def run_experiment(client, traffic_manager, num_agents, num_episodes, num_hazards, load_episode, train_mode=True):
     env = CarlaEnv(client, traffic_manager, num_agents)
 
     # Train mSAC agents
@@ -136,7 +136,7 @@ def run_experiment(client, traffic_manager, num_agents, num_episodes, num_hazard
     else: 
         # load state dicts from models folder
         # Load pre-trained models
-        load_episode = num_episodes
+        load_episode = load_episode
         print("loading agents from episode {}".format(load_episode))
         agents = []
         model_dir = "./models"
@@ -162,11 +162,11 @@ def run_experiment(client, traffic_manager, num_agents, num_episodes, num_hazard
     all_actions = []  # Store all actions here
 
     # Simulation loop
-    max_timesteps_per_episode = 5  # Set this based on your simulation requirements
+    max_timesteps_per_episode = 100  # Set this based on your simulation requirements
 
     for episode in range(num_episodes):
         hazard_type, hazard_type_list = env.create_hazardous_scenario(num_hazards=num_hazards)  # Create a hazardous scenario, TODO figure out how to visualize multiple hazards per episode
-        states = env.reset()  # states shape: [num_agents, state_size]
+        states = env.reset()  # states shape: [num_agents, state_size] TODO reset vehicles, pedestrians, obstacles etc
         total_rewards = [0 for _ in range(num_agents)]
         episode_collisions = 0
         hazard_encounters = 0
@@ -176,17 +176,19 @@ def run_experiment(client, traffic_manager, num_agents, num_episodes, num_hazard
 
         while not done:
             actions = []
+            env.maintain_vehicles()
             for idx, agent in enumerate(agents):
                 agent_state = states[idx]  # Get the state for this specific agent
                 action, _ = agent.select_action(agent_state, idx)
                 actions.append(action)
+                # print(env.get_vehicle_info(env.vehicles[idx]))
                 # episode_actions.append(action.tolist())  # Store actions
                 episode_actions.append({k: v.tolist() if hasattr(v, 'tolist') else v for k, v in action.items()})
 
 
             next_states, rewards, done, info = env.step(actions)
             states = next_states
-
+            
             # Update metrics from info
             episode_collisions += info['collisions']
             hazard_encounters += info['hazard_encounters']
@@ -228,13 +230,14 @@ def run_experiment(client, traffic_manager, num_agents, num_episodes, num_hazard
 
 
 if __name__ == '__main__':
+    
     client = carla.Client('localhost', 2000)
     # client.set_timeout(10.0)
     client.set_timeout(10000)  # Set timeout to 10000 ms (10 seconds)
     traffic_manager = client.get_trafficmanager(8000)
     traffic_manager.set_synchronous_mode(True)
 
-    run_experiment(client, traffic_manager, num_agents=5, num_episodes=100, num_hazards=10, train_mode=False)
+    run_experiment(client, traffic_manager, num_agents=5, num_episodes=50, num_hazards=10, load_episode=100, train_mode=True)
 
 
 # each script and their key roles in the context of the mSAC implementation for hazard avoidance in CARLA:
