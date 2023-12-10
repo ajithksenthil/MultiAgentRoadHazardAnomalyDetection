@@ -139,6 +139,9 @@ if __name__ == "__main__":
     # Define file paths for saving metrics
     train_metrics_file = 'training_metrics.csv'
     val_metrics_file = 'validation_metrics.csv'
+    # Define a directory to save models
+    model_save_dir = 'saved_models'
+    os.makedirs(model_save_dir, exist_ok=True)
 
     # Initialize CSV files for saving metrics
     with open(train_metrics_file, 'w', newline='') as file:
@@ -254,6 +257,10 @@ if __name__ == "__main__":
                 precision_list.append(precision)
                 recall_list.append(recall)
              
+        # Save the model after each epoch
+        model_save_path = os.path.join(model_save_dir, f'model_epoch_{epoch+1}.pth')
+        torch.save(model.state_dict(), model_save_path)
+        print(f"Model saved to {model_save_path}")
 
         # Average the metrics over the validation set
         avg_val_loss = val_loss / len(val_loader)
@@ -268,9 +275,13 @@ if __name__ == "__main__":
         with open(val_metrics_file, 'a', newline='') as file:
             writer = csv.writer(file)
             writer.writerow([epoch + 1, avg_val_loss, avg_pixel_accuracy, avg_iou, avg_aupr, fpr95, auroc])
+        
 
         print(f"Epoch: {epoch+1} - Val Loss: {avg_val_loss:.4f}, Pixel Accuracy: {avg_pixel_accuracy:.4f}, mIoU: {avg_iou:.4f}, AUPR: {avg_aupr:.4f}")
         print(f"Epoch: {epoch+1} - Val Loss: {avg_val_loss:.4f}, FPR95: {fpr95:.2f}%, AUROC: {auroc:.2f}%, AUPR: {aupr:.2f}%")
 
+    final_model_save_path = os.path.join(model_save_dir, 'final_model.pth')
+    torch.save(model.state_dict(), final_model_save_path)
+    print(f"Final model saved to {final_model_save_path}")
 
     print("Training and validation completed.")

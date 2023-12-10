@@ -18,6 +18,7 @@ from sklearn.metrics import roc_curve
 from PIL import Image
 import os
 import csv
+import traceback
 
 class StreetHazardsDataset(Dataset):
     def __init__(self, image_dir, annotation_dir, transform=None):
@@ -180,7 +181,7 @@ def compute_multiclass_entropy(probabilities):
     return -torch.sum(probabilities * torch.log(probabilities + 1e-10), dim=1)
 
 
-def compute_multiclass_free_energy(q, Q_actions_batch):
+# def compute_multiclass_free_energy(q, Q_actions_batch):
     """
     Compute the free energy for multi-class policy distributions.
 
@@ -200,6 +201,32 @@ def compute_multiclass_free_energy(q, Q_actions_batch):
     kl_term = torch.sum(q * torch.log((q + 1e-10) / (Q_actions_batch + 1e-10)), dim=1)
     return -entropy_q - kl_term
 
+def compute_multiclass_free_energy(q, Q_actions_batch):
+    """
+    Compute the free energy for multi-class policy distributions.
+
+    Parameters:
+    - q (torch.Tensor): Policy distributions for the current state.
+    - Q_actions_batch (torch.Tensor): Prior distributions for actions.
+
+    Returns:
+    - torch.Tensor: Free energy values for the policy distributions.
+    """
+    try:
+        # Check dimensions and reshape if necessary
+        if len(q.shape) == 4 and len(Q_actions_batch.shape) == 2:  # Typical expected shapes
+            if q.shape[1:3] != Q_actions_batch.shape[1:]:
+                Q_actions_batch = Q_actions_batch.unsqueeze(-1).unsqueeze(-1).expand_as(q)
+        elif len(q.shape) != len(Q_actions_batch.shape):
+            raise ValueError("q and Q_actions_batch have incompatible shapes.")
+
+        entropy_q = compute_multiclass_entropy(q)
+        kl_term = torch.sum(q * torch.log((q + 1e-10) / (Q_actions_batch + 1e-10)), dim=1)
+        return -entropy_q - kl_term
+    except Exception as e:
+        print(f"Encountered an exception in compute_multiclass_free_energy: {e}")
+        # Return a default tensor to allow training to continue
+        return torch.zeros_like(q[:, 0, :, :])
 
 
 def policy_loss(F):
@@ -246,8 +273,14 @@ def get_target_belief(anomaly_mask):
 
 def compute_iou(preds, labels, num_classes=13):
     iou_list = []
-    preds = preds.flatten()  # Flatten the array if not already
-    labels = labels.flatten()  # Flatten the array if not already
+
+    # Move tensors to CPU
+    preds = preds.cpu()
+    labels = labels.cpu()
+
+    # Convert to Numpy arrays after moving to CPU
+    preds = preds.numpy().flatten()  # Flatten the array if not already
+    labels = labels.numpy().flatten()  # Flatten the array if not already
 
     for cls in range(num_classes):
         pred_inds = preds == cls
@@ -261,6 +294,7 @@ def compute_iou(preds, labels, num_classes=13):
             iou_list.append(intersection / union)
 
     return np.nanmean(iou_list)
+
 
 
 def update_belief(current_belief, observation, belief_update_network):
@@ -283,6 +317,22 @@ def update_belief(current_belief, observation, belief_update_network):
 
 
 if __name__ == "__main__":
+    # Define a directory to save models
+    model_save_dir = 'saved_dai_ood_models'
+    os.makedirs(model_save_dir, exist_ok=True)
+    # Define file paths for saving metrics
+    train_metrics_file = 'dai_ood_training_metrics.csv'
+    val_metrics_file = 'dai_ood_validation_metrics.csv'
+
+    # Initialize CSV files for saving metrics
+    with open(train_metrics_file, 'w', newline='') as file:
+        writer = csv.writer(file)
+        writer.writerow(['Epoch', 'Loss'])
+
+    with open(val_metrics_file, 'w', newline='') as file:
+        writer = csv.writer(file)
+        writer.writerow(['Epoch', 'Val Loss', 'Pixel Accuracy', 'mIoU', 'AUPR', 'FPR95', 'AUROC'])
+    
 
     # Set default CUDA device
     # if torch.cuda.is_available():
@@ -292,7 +342,7 @@ if __name__ == "__main__":
     # Hyperparameters
     hidden_dim = 356  # Adjusted for task complexity
     learning_rate = 0.005
-    num_epochs = 1
+    num_epochs = 8
     num_classes = 13  # 13 classes including the anomaly class (13th)
     # Assuming the feature extractor outputs a feature vector of size 2048
     # H = 512
@@ -343,7 +393,7 @@ if __name__ == "__main__":
     dataset = StreetHazardsDataset(image_dir, annotation_dir, transform=transform)
 
     # Create data loader
-    batch_size = 2 # changing for testing
+    batch_size = 8 # changing for testing
     data_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
     # Add DataLoader for the validation dataset
@@ -381,115 +431,130 @@ if __name__ == "__main__":
         # Initialize Q_actions with a uniform distribution for each pixel at the start of each epoch
         Q_actions_epoch = torch.full((batch_size, num_classes, H, W), fill_value=1.0 / num_classes, device=device)
 
-        
+        total_loss_epoch = 0
+        total_loss_policy_epoch = 0
+        total_loss_efe_epoch = 0
 
         for batch_idx, (images, segmentation_masks, anomaly_masks) in enumerate(data_loader):
-            images = images.to(device)  # [batch_size, 3, H, W]
-            segmentation_masks = segmentation_masks.to(device)  # [batch_size, H, W]
-            anomaly_masks = anomaly_masks.to(device)  # [batch_size, 1, H, W]
-            print("images shape", images.shape, "segmentation_masks shape", segmentation_masks.shape, "anomaly_masks shape", anomaly_masks.shape)
-            segmentation_logits = feature_extractor(images)  # [batch_size, num_classes, H, W]
-            print("segmentation_logits shape", segmentation_logits.shape) # ([8, 13, 512, 512]) PSP: [8, 512, 64, 64]
-            current_belief = compute_belief_from_segmentation(segmentation_logits)  # [batch_size, num_classes, H, W]
-            print("current_belief shape", current_belief.shape) # ([8, 13, 512, 512]) PSP: [8, 512, 64, 64]
+            try: 
+                images = images.to(device)  # [batch_size, 3, H, W]
+                segmentation_masks = segmentation_masks.to(device)  # [batch_size, H, W]
+                anomaly_masks = anomaly_masks.to(device)  # [batch_size, 1, H, W]
+            
+                segmentation_logits = feature_extractor(images)  # [batch_size, num_classes, H, W]
+                # ([8, 13, 512, 512]) PSP: [8, 512, 64, 64]
+                current_belief = compute_belief_from_segmentation(segmentation_logits)  # [batch_size, num_classes, H, W]
+                # ([8, 13, 512, 512]) PSP: [8, 512, 64, 64]
 
-            updated_belief = update_belief(current_belief, segmentation_logits, belief_update)  # [batch_size, num_classes, H, W]
-            print("updated_belief shape", updated_belief.shape) # updated_belief shape [8, 13, 512, 512]
-            # Compute the target belief for multi-class classification
-            target_belief = compute_target_belief(segmentation_masks, num_classes) # Tensor shape: [batch_size, H, W]
-            print("target_belief shape", target_belief.shape) # target_belief shape torch.Size([8, 512, 512])
-            # Calculate policy network output
-            q = policy_network(updated_belief) # Tensor shape: [batch_size, num_classes], Intended Shape: [batch_size, num_classes, H, W]
-            print("q shape", q.shape)
-            # Concatenate belief state and action for EFE input
-            input_to_efe = torch.cat([updated_belief, q], dim=1) # Tensor shape: [batch_size, num_classes * 2, H, W]
-            print("input_to_efe shape", input_to_efe.shape) # ([8, 26, 512, 512])
-            # Calculate the expected free energy
-            G_phi = efe_network(input_to_efe) # Tensor shape: [batch_size, 1, H, W]
-            print("G_phi shape", G_phi.shape) # [8, 1, 512, 512])
+                updated_belief = update_belief(current_belief, segmentation_logits, belief_update)  # [batch_size, num_classes, H, W]
+                # updated_belief shape [8, 13, 512, 512]
 
-            G = compute_actual_efe(updated_belief, target_belief) # Tensor shape: [batch_size, 1, H, W]
-            print("G shape", G.shape) # shape [batch_size] = [8]
-            # Update Q_actions based on the actions chosen
+                # Compute the target belief for multi-class classification
+                target_belief = compute_target_belief(segmentation_masks, num_classes) # Tensor shape: [batch_size, H, W]
+                # target_belief shape torch.Size([8, 512, 512])
+                # Calculate policy network output
+                q = policy_network(updated_belief) # Tensor shape: [batch_size, num_classes], Intended Shape: [batch_size, num_classes, H, W]
 
-            print("Q_actions_epoch shape", Q_actions_epoch.shape) # [num_classes] Intended Shape: [batch_size, num_classes, H, W]
-            # Update Q_actions_epoch based on prior belief state
-            for i, action in enumerate(range(num_classes)):
-                # Select pixels belonging to the current action class
-                action_mask = (target_belief == action).float()
-                
-                # Extract class probabilities from prior belief
-                # updated_belief shape torch.Size([8, 13, 512, 512])
-                action_probs = updated_belief[:, i, :, :]
-
-                # Assign higher Q-values to pixels with higher class probabilities
-                Q_actions_epoch[:, i, :, :] = torch.where(action_mask > 0, action_probs * learning_adjustment, Q_actions_epoch[:, i, :, :])
+                # Concatenate belief state and action for EFE input
+                input_to_efe = torch.cat([updated_belief, q], dim=1) # Tensor shape: [batch_size, num_classes * 2, H, W]
+                # Calculate the expected free energy
+                G_phi = efe_network(input_to_efe) # Tensor shape: [batch_size, 1, H, W]
 
 
-            # Normalize Q_actions_batch to get probability distribution for each pixel
-            print("Q_actions_epoch shape", Q_actions_epoch.shape) # [num_classes] Intended Shape: [batch_size, num_classes, H, W]
-            Q_actions_batch = torch.nn.functional.normalize(Q_actions_epoch, p=1, dim=1) # IndexError: Dimension out of range (expected to be in range of [-1, 0], but got 1)
+                G = compute_actual_efe(updated_belief, target_belief) # Tensor shape: [batch_size, 1, H, W]
+                # Update Q_actions based on the actions chosen
 
+                # Update Q_actions_epoch based on prior belief state
+                for i, action in enumerate(range(num_classes)):
+                    # Select pixels belonging to the current action class
+                    action_mask = (target_belief == action).float()
+                    
+                    # Extract class probabilities from prior belief
+                    # updated_belief shape torch.Size([8, 13, 512, 512])
+                    action_probs = updated_belief[:, i, :, :]
 
-            print("Q_actions_batch.shape", Q_actions_batch.shape) # [num_classes] Intended Shape for Pixel-wise Decisions: [batch_size, num_classes, H, W]
-            print("q shape", q.shape) # [num_classes]
-            # Calculate free energy for the policy network
-            F = compute_multiclass_free_energy(q, Q_actions_batch) # IndexError: Dimension out of range (expected to be in range of [-1, 0], but got 1)
-            print("F shape", F.shape)
-            # Compute the total loss
-            loss_policy = policy_loss(F)
-            print("loss_policy", loss_policy)
-            loss_efe = efe_loss(G_phi, G)
-            print("loss_efe", loss_efe)
-            total_loss = loss_policy + loss_efe
-            print("total_loss", total_loss)
-            # Backpropagation
-            optimizer_policy.zero_grad()
-            optimizer_efe.zero_grad()
-            print("zeroed out gradients now its time for backwards")
-            total_loss.backward()
+                    # Assign higher Q-values to pixels with higher class probabilities
+                    Q_actions_epoch[:, i, :, :] = torch.where(action_mask > 0, action_probs * learning_adjustment, Q_actions_epoch[:, i, :, :])
 
-            # Gradient clipping
-            torch.nn.utils.clip_grad_norm_(policy_network.parameters(), max_norm=1.0)
-            torch.nn.utils.clip_grad_norm_(efe_network.parameters(), max_norm=1.0)
+                # Detach Q_actions_epoch from the computation graph after update
+                Q_actions_epoch = Q_actions_epoch.detach() 
 
-            # Optimizer step
-            print("step")
-            optimizer_policy.step()
-            optimizer_efe.step()
+                # Normalize Q_actions_batch to get probability distribution for each pixel
+                # Intended Shape: [batch_size, num_classes, H, W]
+                Q_actions_batch = torch.nn.functional.normalize(Q_actions_epoch, p=1, dim=1) # IndexError: Dimension out of range (expected to be in range of [-1, 0], but got 1)
 
-            print(f"Epoch: {epoch+1}, Batch: {batch_idx+1}, Loss: {total_loss.item()}")
+                # Calculate free energy for the policy network
+                F = compute_multiclass_free_energy(q, Q_actions_batch) # IndexError: Dimension out of range (expected to be in range of [-1, 0], but got 1)
+
+                # Compute the total loss
+                loss_policy = policy_loss(F)
+
+                loss_efe = efe_loss(G_phi, G)
+
+                total_loss = loss_policy + loss_efe
+
+                # Accumulate batch loss for epoch-level tracking
+                total_loss_epoch += total_loss.item()
+                total_loss_policy_epoch += loss_policy.item()
+                total_loss_efe_epoch += loss_efe.item()
+
+                # Backpropagation
+                optimizer_policy.zero_grad()
+                optimizer_efe.zero_grad()
+
+                total_loss.backward()
+
+                # Gradient clipping
+                torch.nn.utils.clip_grad_norm_(policy_network.parameters(), max_norm=1.0)
+                torch.nn.utils.clip_grad_norm_(efe_network.parameters(), max_norm=1.0)
+
+                # Optimizer step
+                # print("step")
+                optimizer_policy.step()
+                optimizer_efe.step()
+            except Exception as e:
+                print(f"Encountered an exception during training at Epoch {epoch+1}, Batch {batch_idx+1}: {e}")
+                traceback.print_exc()  # This will print the full stack trace
+                continue
+
+            # print(f"Epoch: {epoch+1}, Batch: {batch_idx+1}, Loss: {total_loss.item()}")
 
         # Reset Q_actions for the next epoch
         Q_actions_epoch.fill_(1.0 / num_classes)
+        # Save training metrics
+        average_loss_epoch = total_loss_epoch / len(data_loader)
+        with open(train_metrics_file, 'a', newline='') as file:
+            writer = csv.writer(file)
+            writer.writerow([epoch + 1, average_loss_epoch])
 
         print(f"Epoch {epoch+1} training completed.")
 
         # Proceed to the validation loop...
 
-
         print("Training completed.")    
-
-        print("skipping validation")
-        # to debug train, temporary
-        break
+  
         # validation loop, complete the validation code here
         # During validation, set models to evaluation mode
-        # Validation Loop
-        for epoch in range(num_epochs):
-            # Set models to evaluation mode
-            feature_extractor.eval()
-            belief_update.eval()
-            policy_network.eval()
-            efe_network.eval()
+        # Set models to evaluation mode
+        feature_extractor.eval()
+        belief_update.eval()
+        policy_network.eval()
+        efe_network.eval()
 
-            val_loss = 0.0
-            ious, pixel_accuracies, precision_list, recall_list = [], [], [], []
-            all_labels = []
-            all_predictions = []
+        val_loss_epoch = 0
+        val_loss_policy_epoch = 0
+        val_loss_efe_epoch = 0
 
-            with torch.no_grad():
-                for images, segmentation_masks, anomaly_masks in val_loader:
+        ious, pixel_accuracies, precision_list, recall_list = [], [], [], []
+        all_labels = []
+        all_predictions = []
+        anomaly_truths = []
+        anomaly_predictions = []
+
+        with torch.no_grad():
+            for batch_idx, (images, segmentation_masks, anomaly_masks) in enumerate(val_loader):
+                
+                try:
                     images = images.to(device)
                     segmentation_masks = segmentation_masks.to(device)
                     anomaly_masks = anomaly_masks.to(device)
@@ -505,31 +570,99 @@ if __name__ == "__main__":
                     iou = compute_iou(segmentation_pred, segmentation_masks, num_classes=13)
                     ious.append(iou)
 
+                    # Compute the target belief for multi-class classification
+                    target_belief = compute_target_belief(segmentation_masks, num_classes)
+
+                    # Calculate policy network output
+                    q = policy_network(updated_belief)
+
+                    # Concatenate belief state and action for EFE input
+                    input_to_efe = torch.cat([updated_belief, q], dim=1)
+
+                    # Calculate the expected free energy
+                    G_phi = efe_network(input_to_efe)
+                    G = compute_actual_efe(updated_belief, target_belief)
+                    # Assuming the last class (index 12) is the anomaly class
+                    anomaly_class_index = 12
+                    anomaly_preds = updated_belief[:, anomaly_class_index, :, :] >= 0.5  # Applying threshold
+                    anomaly_preds_flat = anomaly_preds.view(-1).cpu().numpy()  # Flatten for metrics calculation
+
+                    anomaly_truth_flat = anomaly_masks.view(-1).cpu().numpy()
+                    # Compute validation losses (similar to training loop)
+                    val_loss_policy = policy_loss(F)
+                    val_loss_efe = efe_loss(G_phi, G)
+                    val_total_loss = val_loss_policy + val_loss_efe
+
+                    # Accumulate validation losses for epoch-level metrics
+                    val_loss_epoch += val_total_loss.item()
+                    val_loss_policy_epoch += val_loss_policy.item()
+                    val_loss_efe_epoch += val_loss_efe.item()
+
                     # Compute metrics for OoD detection
-                    target_belief = get_target_belief(anomaly_masks)
-                    anomaly_preds = updated_belief >= 0.5  # Threshold belief for anomaly detection
-                    pixel_accuracies.append(np.mean(anomaly_preds.cpu().numpy() == anomaly_masks.cpu().numpy()))
+                    pixel_accuracies.append(np.mean(anomaly_preds_flat.cpu().numpy() == anomaly_truth_flat.cpu().numpy()))
+                    ious.append(compute_iou(anomaly_preds.cpu().numpy(), anomaly_masks.cpu().numpy(), num_classes=13))
 
                     # Prepare data for AUROC, AUPR, and FPR95 calculations
-                    anomaly_truth_flat = anomaly_masks.view(-1).cpu().numpy()
-                    anomaly_preds_flat = anomaly_preds.view(-1).cpu().numpy()
+                    # Metrics for OoD detection (focus on anomaly class)
+                    fpr, tpr, _ = roc_curve(anomaly_truth_flat, anomaly_preds_flat)
+                    fpr95 = fpr[np.where(tpr >= 0.95)[0][0]] * 100
+                    auroc = roc_auc_score(anomaly_truth_flat, anomaly_preds_flat) * 100
                     precision, recall, _ = precision_recall_curve(anomaly_truth_flat, anomaly_preds_flat)
+                    aupr = auc(recall, precision) * 100
+
+                    # Append to lists for calculating averages
                     precision_list.append(precision)
                     recall_list.append(recall)
-                    fpr, tpr, _ = roc_curve(anomaly_truth_flat, anomaly_preds_flat)
-                    if np.where(tpr >= 0.95)[0].size > 0:
-                        fpr95 = fpr[np.where(tpr >= 0.95)[0][0]] * 100
-                    else:
-                        fpr95 = 100.0  # Default to 100% if TPR never reaches 95%
 
-                    auroc = roc_auc_score(anomaly_truth_flat, anomaly_preds_flat) * 100
 
-                # Average the metrics over the validation set
-                avg_val_iou = np.nanmean(ious)
-                avg_val_pixel_accuracy = np.mean(pixel_accuracies)
-                avg_val_aupr = np.mean([auc(recall_list[i], precision_list[i]) for i in range(len(precision_list))] * 100)
-                avg_val_fpr95 = fpr95
-                avg_val_auroc = auroc
+                    
+                except Exception as e:
+                    print(f"Encountered an exception during validation at Epoch {epoch+1}, Batch {batch_idx+1}: {e}")
+                    # anomaly_truths.append(None)
+                    # anomaly_predictions.append(None)
+                    traceback.print_exc()  # This will print the full stack trace
+                    continue
+            
 
-                print(f"Epoch: {epoch+1} - Val mIoU: {avg_val_iou:.4f}, Pixel Accuracy: {avg_val_pixel_accuracy:.4f}, AUPR: {avg_val_aupr:.2f}%, FPR95: {avg_val_fpr95:.2f}%, AUROC: {avg_val_auroc:.2f}%")
+
+            # After the loop, concatenate and filter out None values before calculating metrics
+            anomaly_truths = np.concatenate([arr for arr in anomaly_truths if arr is not None])
+            anomaly_predictions = np.concatenate([arr for arr in anomaly_predictions if arr is not None])
+
+            
+           # Average the metrics over the validation set
+            avg_val_loss = val_loss_epoch / len(val_loader)
+            avg_iou = np.nanmean(ious)
+            avg_pixel_accuracy = np.mean(pixel_accuracies)
+            avg_aupr = np.mean([auc(recall_list[i], precision_list[i]) for i in range(len(precision_list))] * 100)
+            avg_fpr95 = fpr95
+            avg_auroc = auroc
+            with open(val_metrics_file, 'a', newline='') as file:
+                writer = csv.writer(file)
+                writer.writerow([epoch + 1, avg_val_loss, avg_pixel_accuracy, avg_iou, avg_aupr, avg_fpr95, avg_auroc])
+
+            # Save the models after each epoch
+            feature_extractor_save_path = os.path.join(model_save_dir, f'feature_extractor_epoch_{epoch+1}.pth')
+            belief_update_save_path = os.path.join(model_save_dir, f'belief_update_epoch_{epoch+1}.pth')
+            policy_network_save_path = os.path.join(model_save_dir, f'policy_network_epoch_{epoch+1}.pth')
+            efe_network_save_path = os.path.join(model_save_dir, f'efe_network_epoch_{epoch+1}.pth')
+
+            torch.save(feature_extractor.state_dict(), feature_extractor_save_path)
+            torch.save(belief_update.state_dict(), belief_update_save_path)
+            torch.save(policy_network.state_dict(), policy_network_save_path)
+            torch.save(efe_network.state_dict(), efe_network_save_path)
+
+            print(f"Models saved for epoch {epoch+1}")
+            print(f"Epoch: {epoch+1} - Val mIoU: {avg_iou:.4f}, Pixel Accuracy: {avg_pixel_accuracy:.4f}, AUPR: {avg_aupr:.2f}%, FPR95: {avg_fpr95:.2f}%, AUROC: {avg_auroc:.2f}%")
+
+    # After the completion of all epochs, save the final state of each model
+    feature_extractor_save_path = os.path.join(model_save_dir, 'final_feature_extractor.pth')
+    belief_update_save_path = os.path.join(model_save_dir, 'final_belief_update.pth')
+    policy_network_save_path = os.path.join(model_save_dir, 'final_policy_network.pth')
+    efe_network_save_path = os.path.join(model_save_dir, 'final_efe_network.pth')
+
+    torch.save(feature_extractor.state_dict(), feature_extractor_save_path)
+    torch.save(belief_update.state_dict(), belief_update_save_path)
+    torch.save(policy_network.state_dict(), policy_network_save_path)
+    torch.save(efe_network.state_dict(), efe_network_save_path)
 
