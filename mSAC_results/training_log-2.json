@@ -1,0 +1,952 @@
+[
+    {
+        "episode": 0,
+        "timestep": 4,
+        "rewards": [
+            0.0,
+            0.0,
+            -100.0,
+            0.0,
+            0.0
+        ],
+        "average_reward": -60.0,
+        "hazard_list": [
+            "static_obstacle",
+            "static_obstacle",
+            "static_obstacle",
+            "static_obstacle",
+            "static_obstacle"
+        ]
+    },
+    {
+        "episode": 1,
+        "timestep": 0,
+        "rewards": [
+            -100.0,
+            -100.0,
+            -100.0,
+            0.0,
+            -100.0
+        ],
+        "average_reward": -60.0,
+        "hazard_list": [
+            "static_obstacle",
+            "static_obstacle",
+            "static_obstacle",
+            "static_obstacle",
+            "static_obstacle"
+        ]
+    },
+    {
+        "episode": 2,
+        "timestep": 0,
+        "rewards": [
+            -100.0,
+            -100.0,
+            -100.0,
+            0.0,
+            -100.0
+        ],
+        "average_reward": -60.0,
+        "hazard_list": [
+            "weather_change",
+            "weather_change",
+            "weather_change",
+            "weather_change",
+            "weather_change"
+        ]
+    },
+    {
+        "episode": 3,
+        "timestep": 0,
+        "rewards": [
+            -100.0,
+            -100.0,
+            -100.0,
+            0.0,
+            -100.0
+        ],
+        "average_reward": -60.0,
+        "hazard_list": [
+            "static_obstacle",
+            "static_obstacle",
+            "static_obstacle",
+            "static_obstacle",
+            "static_obstacle"
+        ]
+    },
+    {
+        "episode": 4,
+        "timestep": 0,
+        "rewards": [
+            -100.0,
+            -100.0,
+            -100.0,
+            0.0,
+            -100.0
+        ],
+        "average_reward": -60.0,
+        "hazard_list": [
+            "static_obstacle",
+            "static_obstacle",
+            "static_obstacle",
+            "static_obstacle",
+            "static_obstacle"
+        ]
+    },
+    {
+        "episode": 5,
+        "timestep": 0,
+        "rewards": [
+            -100.0,
+            -100.0,
+            -100.0,
+            -100.0,
+            -100.0
+        ],
+        "average_reward": -60.0,
+        "hazard_list": [
+            "dynamic_event",
+            "dynamic_event",
+            "dynamic_event",
+            "dynamic_event",
+            "dynamic_event"
+        ]
+    },
+    {
+        "episode": 6,
+        "timestep": 0,
+        "rewards": [
+            -100.0,
+            -100.0,
+            -100.0,
+            -100.0,
+            -100.0
+        ],
+        "average_reward": -60.0,
+        "hazard_list": [
+            "dynamic_event",
+            "dynamic_event",
+            "dynamic_event",
+            "dynamic_event",
+            "dynamic_event"
+        ]
+    },
+    {
+        "episode": 7,
+        "timestep": 0,
+        "rewards": [
+            -100.0,
+            -100.0,
+            -100.0,
+            -100.0,
+            -100.0
+        ],
+        "average_reward": -60.0,
+        "hazard_list": [
+            "static_obstacle",
+            "static_obstacle",
+            "static_obstacle",
+            "static_obstacle",
+            "static_obstacle"
+        ]
+    },
+    {
+        "episode": 8,
+        "timestep": 0,
+        "rewards": [
+            -100.0,
+            -100.0,
+            -100.0,
+            -100.0,
+            -100.0
+        ],
+        "average_reward": -60.0,
+        "hazard_list": [
+            "static_obstacle",
+            "static_obstacle",
+            "static_obstacle",
+            "static_obstacle",
+            "static_obstacle"
+        ]
+    },
+    {
+        "episode": 9,
+        "timestep": 0,
+        "rewards": [
+            -100.0,
+            -100.0,
+            -100.0,
+            -100.0,
+            -100.0
+        ],
+        "average_reward": -60.0,
+        "hazard_list": [
+            "weather_change",
+            "weather_change",
+            "weather_change",
+            "weather_change",
+            "weather_change"
+        ]
+    },
+    {
+        "episode": 10,
+        "timestep": 0,
+        "rewards": [
+            -100.0,
+            -100.0,
+            -100.0,
+            -100.0,
+            -100.0
+        ],
+        "average_reward": -60.0,
+        "hazard_list": [
+            "static_obstacle",
+            "static_obstacle",
+            "static_obstacle",
+            "static_obstacle",
+            "static_obstacle"
+        ]
+    },
+    {
+        "episode": 11,
+        "timestep": 0,
+        "rewards": [
+            -100.0,
+            -100.0,
+            -100.0,
+            -100.0,
+            -100.0
+        ],
+        "average_reward": -60.0,
+        "hazard_list": [
+            "weather_change",
+            "weather_change",
+            "weather_change",
+            "weather_change",
+            "weather_change"
+        ]
+    },
+    {
+        "episode": 12,
+        "timestep": 0,
+        "rewards": [
+            -100.0,
+            -100.0,
+            -100.0,
+            -100.0,
+            -100.0
+        ],
+        "average_reward": -60.0,
+        "hazard_list": [
+            "static_obstacle",
+            "static_obstacle",
+            "static_obstacle",
+            "static_obstacle",
+            "static_obstacle"
+        ]
+    },
+    {
+        "episode": 13,
+        "timestep": 0,
+        "rewards": [
+            -100.0,
+            -100.0,
+            -100.0,
+            -100.0,
+            -100.0
+        ],
+        "average_reward": -60.0,
+        "hazard_list": [
+            "static_obstacle",
+            "static_obstacle",
+            "static_obstacle",
+            "static_obstacle",
+            "static_obstacle"
+        ]
+    },
+    {
+        "episode": 14,
+        "timestep": 0,
+        "rewards": [
+            -100.0,
+            -100.0,
+            -100.0,
+            -100.0,
+            -100.0
+        ],
+        "average_reward": -60.0,
+        "hazard_list": [
+            "dynamic_event",
+            "dynamic_event",
+            "dynamic_event",
+            "dynamic_event",
+            "dynamic_event"
+        ]
+    },
+    {
+        "episode": 15,
+        "timestep": 0,
+        "rewards": [
+            -100.0,
+            -100.0,
+            -100.0,
+            -100.0,
+            -100.0
+        ],
+        "average_reward": -60.0,
+        "hazard_list": [
+            "dynamic_event",
+            "dynamic_event",
+            "dynamic_event",
+            "dynamic_event",
+            "dynamic_event"
+        ]
+    },
+    {
+        "episode": 16,
+        "timestep": 0,
+        "rewards": [
+            -100.0,
+            -100.0,
+            0.0,
+            -100.0,
+            -100.0
+        ],
+        "average_reward": -60.0,
+        "hazard_list": [
+            "dynamic_event",
+            "dynamic_event",
+            "dynamic_event",
+            "dynamic_event",
+            "dynamic_event"
+        ]
+    },
+    {
+        "episode": 17,
+        "timestep": 0,
+        "rewards": [
+            -100.0,
+            -100.0,
+            0.0,
+            -100.0,
+            -100.0
+        ],
+        "average_reward": -60.0,
+        "hazard_list": [
+            "dynamic_event",
+            "dynamic_event",
+            "dynamic_event",
+            "dynamic_event",
+            "dynamic_event"
+        ]
+    },
+    {
+        "episode": 18,
+        "timestep": 0,
+        "rewards": [
+            0.0,
+            -100.0,
+            0.0,
+            -100.0,
+            -100.0
+        ],
+        "average_reward": -60.0,
+        "hazard_list": [
+            "weather_change",
+            "weather_change",
+            "weather_change",
+            "weather_change",
+            "weather_change"
+        ]
+    },
+    {
+        "episode": 19,
+        "timestep": 0,
+        "rewards": [
+            0.0,
+            -100.0,
+            0.0,
+            -100.0,
+            -100.0
+        ],
+        "average_reward": -60.0,
+        "hazard_list": [
+            "weather_change",
+            "weather_change",
+            "weather_change",
+            "weather_change",
+            "weather_change"
+        ]
+    },
+    {
+        "episode": 20,
+        "timestep": 0,
+        "rewards": [
+            0.0,
+            -100.0,
+            0.0,
+            -100.0,
+            0.0
+        ],
+        "average_reward": -60.0,
+        "hazard_list": [
+            "weather_change",
+            "weather_change",
+            "weather_change",
+            "weather_change",
+            "weather_change"
+        ]
+    },
+    {
+        "episode": 21,
+        "timestep": 0,
+        "rewards": [
+            -100.0,
+            -100.0,
+            -100.0,
+            -100.0,
+            0.0
+        ],
+        "average_reward": -60.0,
+        "hazard_list": [
+            "weather_change",
+            "weather_change",
+            "weather_change",
+            "weather_change",
+            "weather_change"
+        ]
+    },
+    {
+        "episode": 22,
+        "timestep": 0,
+        "rewards": [
+            -100.0,
+            -100.0,
+            -100.0,
+            -100.0,
+            0.0
+        ],
+        "average_reward": -60.0,
+        "hazard_list": [
+            "dynamic_event",
+            "dynamic_event",
+            "dynamic_event",
+            "dynamic_event",
+            "dynamic_event"
+        ]
+    },
+    {
+        "episode": 23,
+        "timestep": 1,
+        "rewards": [
+            -200.0,
+            0.0,
+            -200.0,
+            -200.0,
+            0.0
+        ],
+        "average_reward": -60.0,
+        "hazard_list": [
+            "dynamic_event",
+            "dynamic_event",
+            "dynamic_event",
+            "dynamic_event",
+            "dynamic_event"
+        ]
+    },
+    {
+        "episode": 24,
+        "timestep": 0,
+        "rewards": [
+            -100.0,
+            0.0,
+            -100.0,
+            0.0,
+            -100.0
+        ],
+        "average_reward": -60.0,
+        "hazard_list": [
+            "weather_change",
+            "weather_change",
+            "weather_change",
+            "weather_change",
+            "weather_change"
+        ]
+    },
+    {
+        "episode": 25,
+        "timestep": 0,
+        "rewards": [
+            -100.0,
+            -100.0,
+            -100.0,
+            0.0,
+            -100.0
+        ],
+        "average_reward": -60.0,
+        "hazard_list": [
+            "static_obstacle",
+            "static_obstacle",
+            "static_obstacle",
+            "static_obstacle",
+            "static_obstacle"
+        ]
+    },
+    {
+        "episode": 26,
+        "timestep": 0,
+        "rewards": [
+            -100.0,
+            -100.0,
+            -100.0,
+            0.0,
+            -100.0
+        ],
+        "average_reward": -60.0,
+        "hazard_list": [
+            "weather_change",
+            "weather_change",
+            "weather_change",
+            "weather_change",
+            "weather_change"
+        ]
+    },
+    {
+        "episode": 27,
+        "timestep": 0,
+        "rewards": [
+            -100.0,
+            -100.0,
+            -100.0,
+            0.0,
+            -100.0
+        ],
+        "average_reward": -60.0,
+        "hazard_list": [
+            "weather_change",
+            "weather_change",
+            "weather_change",
+            "weather_change",
+            "weather_change"
+        ]
+    },
+    {
+        "episode": 28,
+        "timestep": 0,
+        "rewards": [
+            -100.0,
+            -100.0,
+            -100.0,
+            0.0,
+            -100.0
+        ],
+        "average_reward": -60.0,
+        "hazard_list": [
+            "dynamic_event",
+            "dynamic_event",
+            "dynamic_event",
+            "dynamic_event",
+            "dynamic_event"
+        ]
+    },
+    {
+        "episode": 29,
+        "timestep": 0,
+        "rewards": [
+            -100.0,
+            -100.0,
+            -100.0,
+            0.0,
+            -100.0
+        ],
+        "average_reward": -60.0,
+        "hazard_list": [
+            "weather_change",
+            "weather_change",
+            "weather_change",
+            "weather_change",
+            "weather_change"
+        ]
+    },
+    {
+        "episode": 30,
+        "timestep": 0,
+        "rewards": [
+            -100.0,
+            -100.0,
+            -100.0,
+            0.0,
+            -100.0
+        ],
+        "average_reward": -60.0,
+        "hazard_list": [
+            "static_obstacle",
+            "static_obstacle",
+            "static_obstacle",
+            "static_obstacle",
+            "static_obstacle"
+        ]
+    },
+    {
+        "episode": 31,
+        "timestep": 0,
+        "rewards": [
+            -100.0,
+            -100.0,
+            -100.0,
+            0.0,
+            -100.0
+        ],
+        "average_reward": -60.0,
+        "hazard_list": [
+            "dynamic_event",
+            "dynamic_event",
+            "dynamic_event",
+            "dynamic_event",
+            "dynamic_event"
+        ]
+    },
+    {
+        "episode": 32,
+        "timestep": 0,
+        "rewards": [
+            -100.0,
+            -100.0,
+            -100.0,
+            0.0,
+            -100.0
+        ],
+        "average_reward": -60.0,
+        "hazard_list": [
+            "weather_change",
+            "weather_change",
+            "weather_change",
+            "weather_change",
+            "weather_change"
+        ]
+    },
+    {
+        "episode": 33,
+        "timestep": 0,
+        "rewards": [
+            -100.0,
+            -100.0,
+            -100.0,
+            0.0,
+            -100.0
+        ],
+        "average_reward": -60.0,
+        "hazard_list": [
+            "dynamic_event",
+            "dynamic_event",
+            "dynamic_event",
+            "dynamic_event",
+            "dynamic_event"
+        ]
+    },
+    {
+        "episode": 34,
+        "timestep": 0,
+        "rewards": [
+            -100.0,
+            -100.0,
+            -100.0,
+            0.0,
+            -100.0
+        ],
+        "average_reward": -60.0,
+        "hazard_list": [
+            "dynamic_event",
+            "dynamic_event",
+            "dynamic_event",
+            "dynamic_event",
+            "dynamic_event"
+        ]
+    },
+    {
+        "episode": 35,
+        "timestep": 0,
+        "rewards": [
+            -100.0,
+            -100.0,
+            -100.0,
+            -100.0,
+            -100.0
+        ],
+        "average_reward": -60.0,
+        "hazard_list": [
+            "weather_change",
+            "weather_change",
+            "weather_change",
+            "weather_change",
+            "weather_change"
+        ]
+    },
+    {
+        "episode": 36,
+        "timestep": 0,
+        "rewards": [
+            -100.0,
+            -100.0,
+            -100.0,
+            -100.0,
+            -100.0
+        ],
+        "average_reward": -60.0,
+        "hazard_list": [
+            "dynamic_event",
+            "dynamic_event",
+            "dynamic_event",
+            "dynamic_event",
+            "dynamic_event"
+        ]
+    },
+    {
+        "episode": 37,
+        "timestep": 0,
+        "rewards": [
+            -100.0,
+            -100.0,
+            -100.0,
+            -100.0,
+            -100.0
+        ],
+        "average_reward": -60.0,
+        "hazard_list": [
+            "static_obstacle",
+            "static_obstacle",
+            "static_obstacle",
+            "static_obstacle",
+            "static_obstacle"
+        ]
+    },
+    {
+        "episode": 38,
+        "timestep": 0,
+        "rewards": [
+            -100.0,
+            -100.0,
+            0.0,
+            -100.0,
+            -100.0
+        ],
+        "average_reward": -60.0,
+        "hazard_list": [
+            "weather_change",
+            "weather_change",
+            "weather_change",
+            "weather_change",
+            "weather_change"
+        ]
+    },
+    {
+        "episode": 39,
+        "timestep": 0,
+        "rewards": [
+            -100.0,
+            -100.0,
+            0.0,
+            -100.0,
+            -100.0
+        ],
+        "average_reward": -60.0,
+        "hazard_list": [
+            "static_obstacle",
+            "static_obstacle",
+            "static_obstacle",
+            "static_obstacle",
+            "static_obstacle"
+        ]
+    },
+    {
+        "episode": 40,
+        "timestep": 0,
+        "rewards": [
+            0.0,
+            -100.0,
+            0.0,
+            -100.0,
+            -100.0
+        ],
+        "average_reward": -60.0,
+        "hazard_list": [
+            "dynamic_event",
+            "dynamic_event",
+            "dynamic_event",
+            "dynamic_event",
+            "dynamic_event"
+        ]
+    },
+    {
+        "episode": 41,
+        "timestep": 0,
+        "rewards": [
+            0.0,
+            -100.0,
+            0.0,
+            -100.0,
+            -100.0
+        ],
+        "average_reward": -60.0,
+        "hazard_list": [
+            "static_obstacle",
+            "static_obstacle",
+            "static_obstacle",
+            "static_obstacle",
+            "static_obstacle"
+        ]
+    },
+    {
+        "episode": 42,
+        "timestep": 0,
+        "rewards": [
+            0.0,
+            -100.0,
+            0.0,
+            0.0,
+            0.0
+        ],
+        "average_reward": -60.0,
+        "hazard_list": [
+            "static_obstacle",
+            "static_obstacle",
+            "static_obstacle",
+            "static_obstacle",
+            "static_obstacle"
+        ]
+    },
+    {
+        "episode": 43,
+        "timestep": 0,
+        "rewards": [
+            0.0,
+            -100.0,
+            0.0,
+            -100.0,
+            0.0
+        ],
+        "average_reward": -60.0,
+        "hazard_list": [
+            "static_obstacle",
+            "static_obstacle",
+            "static_obstacle",
+            "static_obstacle",
+            "static_obstacle"
+        ]
+    },
+    {
+        "episode": 44,
+        "timestep": 2,
+        "rewards": [
+            -200.0,
+            0.0,
+            0.0,
+            -300.0,
+            0.0
+        ],
+        "average_reward": -60.0,
+        "hazard_list": [
+            "dynamic_event",
+            "dynamic_event",
+            "dynamic_event",
+            "dynamic_event",
+            "dynamic_event"
+        ]
+    },
+    {
+        "episode": 45,
+        "timestep": 0,
+        "rewards": [
+            -100.0,
+            0.0,
+            -100.0,
+            -100.0,
+            -100.0
+        ],
+        "average_reward": -60.0,
+        "hazard_list": [
+            "dynamic_event",
+            "dynamic_event",
+            "dynamic_event",
+            "dynamic_event",
+            "dynamic_event"
+        ]
+    },
+    {
+        "episode": 46,
+        "timestep": 0,
+        "rewards": [
+            -100.0,
+            0.0,
+            -100.0,
+            -100.0,
+            -100.0
+        ],
+        "average_reward": -60.0,
+        "hazard_list": [
+            "static_obstacle",
+            "static_obstacle",
+            "static_obstacle",
+            "static_obstacle",
+            "static_obstacle"
+        ]
+    },
+    {
+        "episode": 47,
+        "timestep": 0,
+        "rewards": [
+            -100.0,
+            -100.0,
+            -100.0,
+            -100.0,
+            -100.0
+        ],
+        "average_reward": -60.0,
+        "hazard_list": [
+            "static_obstacle",
+            "static_obstacle",
+            "static_obstacle",
+            "static_obstacle",
+            "static_obstacle"
+        ]
+    },
+    {
+        "episode": 48,
+        "timestep": 0,
+        "rewards": [
+            -100.0,
+            -100.0,
+            -100.0,
+            -100.0,
+            -100.0
+        ],
+        "average_reward": -60.0,
+        "hazard_list": [
+            "static_obstacle",
+            "static_obstacle",
+            "static_obstacle",
+            "static_obstacle",
+            "static_obstacle"
+        ]
+    },
+    {
+        "episode": 49,
+        "timestep": 0,
+        "rewards": [
+            -100.0,
+            -100.0,
+            0.0,
+            -100.0,
+            -100.0
+        ],
+        "average_reward": -60.0,
+        "hazard_list": [
+            "dynamic_event",
+            "dynamic_event",
+            "dynamic_event",
+            "dynamic_event",
+            "dynamic_event"
+        ]
+    }
+]
