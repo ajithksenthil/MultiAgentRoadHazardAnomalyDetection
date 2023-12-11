@@ -19,12 +19,13 @@ class TrainingLogger:
         self.file_name = file_name
         self.data = []
 
-    def log(self, episode, timestep, rewards, avg_reward=None):
+    def log(self, episode, timestep, rewards, avg_reward=None, hazard_list=None):
         self.data.append({
             "episode": episode,
             "timestep": timestep,
             "rewards": rewards,
-            "average_reward": avg_reward
+            "average_reward": avg_reward,
+            "hazard_list": hazard_list
         })
 
     def save(self):
@@ -65,6 +66,7 @@ def train_mSAC(env, num_agents, max_episodes, max_timesteps, batch_size):
         total_reward = 0.0
         for _ in range(num_runs):
             states = env.reset()
+            initial_hazard_type, initial_hazard_type_list = env.create_hazardous_scenario(num_hazards=5) 
             done = False
             eval_time_step = 0 
             while not done:
@@ -87,12 +89,13 @@ def train_mSAC(env, num_agents, max_episodes, max_timesteps, batch_size):
 
 
     profiler = cProfile.Profile()
-
+    num_hazards = 5
     # Training Loop
     torch.autograd.set_detect_anomaly(True)
     for episode in range(max_episodes):
         print("true episode", episode)
-        states = env.reset() # TODO need to properly implement, avoid destroying prematurely 
+        states = env.reset() # gets rid of hazards 
+        initial_hazard_type, initial_hazard_type_list = env.create_hazardous_scenario(num_hazards=num_hazards) 
         total_rewards = [0 for _ in range(num_agents)]
 
         for t in range(max_timesteps):
@@ -132,7 +135,7 @@ def train_mSAC(env, num_agents, max_episodes, max_timesteps, batch_size):
                 print(f"Agent {i}, Episode {episode}, Evaluation Average Reward: {avg_reward}")
                 save_model(agent, episode, i)
 
-        logger.log(episode, t, total_rewards, avg_reward)
+        logger.log(episode, t, total_rewards, avg_reward, initial_hazard_type_list)
 
         torch.cuda.empty_cache()
 
