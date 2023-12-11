@@ -599,8 +599,8 @@ if __name__ == "__main__":
                     val_loss_efe_epoch += val_loss_efe.item()
 
                     # Compute metrics for OoD detection
-                    pixel_accuracies.append(np.mean(anomaly_preds_flat.cpu().numpy() == anomaly_truth_flat.cpu().numpy()))
-                    ious.append(compute_iou(anomaly_preds.cpu().numpy(), anomaly_masks.cpu().numpy(), num_classes=13))
+                    pixel_accuracies.append(np.mean(anomaly_preds_flat == anomaly_truth_flat))
+                    ious.append(compute_iou(anomaly_preds, anomaly_masks, num_classes=13))
 
                     # Prepare data for AUROC, AUPR, and FPR95 calculations
                     # Metrics for OoD detection (focus on anomaly class)
