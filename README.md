@@ -50,6 +50,8 @@ Epoch 5:
 
 Validation run: 
 
+![Plot of Image, Ground Truth Segmentation Mask, Predicted Segmentation Mask](example.png)
+
 
 
 
