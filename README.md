@@ -39,3 +39,20 @@ At this milestone, no results have been achieved as of yet, however preliminary 
 [3] G. Joseph, C. Zhong, M. C. Gursoy, S. Velipasalar, and P. K. Varsh- ney, ”Anomaly Detection via Controlled Sensing and Deep Active In- ference,” arXiv preprint arXiv:2105.06288, 2021. [Online]. Available: https://doi.org/10.48550/arXiv.2105.06288
 [4] T. Haarnoja, A. Zhou, K. Hartikainen, G. Tucker, S. Ha, J. Tan, V. Kumar, H. Zhu, A. Gupta, P. Abbeel, and S. Levine, ”Soft Actor-Critic Algorithms and Applications,” arXiv preprint arXiv:1812.05905, 2019. [Online]. Available: https://arxiv.org/abs/1812.05905
 [5] Pu, Y., Wang, S., Yang, R., Yao, X., & Li, B. Decomposed Soft Actor-Critic Method for Cooperative Multi-Agent Rein- forcement Learning. arXiv preprint arXiv:2104.06655, 2021. https://doi.org/10.48550/arXiv.2104.06655
+
+
+
+Preliminary Results: 
+
+Max Logit OoD Anomaly Detection 
+
+Epoch 5: 
+
+Validation run: 
+
+
+
+
+
+
+
