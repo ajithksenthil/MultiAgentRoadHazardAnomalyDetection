@@ -31,7 +31,7 @@ class CarlaEnv:
         self.spawned_pedestrians = []  # List to keep track of spawned pedestrians
         # Define the transform for preprocessing the input image
         # use this for ResNet Binary Classifier or DAI binary classifier
-        # """
+        """
         self.transform = transforms.Compose([
             transforms.Resize((224, 224)),
             transforms.ToTensor(),
@@ -40,7 +40,7 @@ class CarlaEnv:
         # """
 
         # use this for max logit
-        """
+        # """
         self.transform = transforms.Compose([
             transforms.Resize((512, 512)),
             transforms.ToTensor(),
@@ -67,25 +67,28 @@ class CarlaEnv:
         self.traffic_manager_api = TrafficManagerAPI(traffic_manager, world=self.world)
 
         # Initialize the hazard detection model
+        """
         self.hazard_detection_model = ResNetBinaryClassifier().to('cuda:1')
         model_path = '../trained_model.pth'  # Path to the model in the parent directory
         self.hazard_detection_model.load_state_dict(torch.load(model_path, map_location='cuda:1'))
         self.hazard_detection_model = nn.DataParallel(self.hazard_detection_model, device_ids=[1, 0])
         self.hazard_detection_model = self.hazard_detection_model.to('cuda:1')
         self.hazard_detection_model.eval()
-
+        # """
 
         # initialize hazard detection using OOD max logit
         # Initialize the max-logit anomaly detection model
         # """
-        self.anomaly_detection_model = PSPNetResNet101().to('cuda:1')
-        
-        # Load the trained model
-        """
-        model_path = '../saved_models/final_model.pth'  # Adjust the path as needed
-        self.anomaly_detection_model.load_state_dict(torch.load(model_path, map_location='cuda:1'))
+        # Initialize the max-logit anomaly detection model
+        self.anomaly_detection_model = PSPNetResNet101()
         self.anomaly_detection_model = nn.DataParallel(self.anomaly_detection_model, device_ids=[1, 0])
         self.anomaly_detection_model = self.anomaly_detection_model.to('cuda:1')
+
+        # Load the trained model
+        model_path = '../saved_models/model_epoch_7.pth'  # Adjust the path as needed
+        self.anomaly_detection_model.load_state_dict(torch.load(model_path, map_location='cuda:1'))
+
+        # Set the model to evaluation mode
         self.anomaly_detection_model.eval()
         # """
         # Vehicle and sensor setup
@@ -276,7 +279,9 @@ class CarlaEnv:
 
             # Update sensor data and hazard detection for this vehicle
             self.process_sensor_data(vehicle)
-            anomaly_detected = self.detect_hazards_for_vehicle(vehicle)
+            # change for max logit
+            # anomaly_detected = self.detect_hazards_for_vehicle(vehicle)
+            anomaly_detected = self.detect_anomaly_for_vehicle(vehicle)
             self.anomaly_flags[idx] = anomaly_detected
             anomaly_detected_flags.append(anomaly_detected)
 
@@ -412,9 +417,9 @@ class CarlaEnv:
         camera_data = array[:, :, :3]  # Store RGB data
         self.camera_sensor_data[vehicle_id] = camera_data
         # Perform hazard detection
-        hazard_detected = self.detect_hazards_for_vehicle(self.vehicles[vehicle_index]) 
+        # hazard_detected = self.detect_hazards_for_vehicle(self.vehicles[vehicle_index]) 
         # hazard_detected = self.detect_dai_ood_hazards_for_vehicle(self.vehicles[vehicle_index]) 
-        # hazard_detected = self.detect_maxlogit_ood_hazards_for_vehicle(self.vehicles[vehicle_index])
+        hazard_detected, _ = self.detect_anomaly_for_vehicle(self.vehicles[vehicle_index])
 
         # Update the anomaly flag based on hazard detection for the specific vehicle
         # You might want to maintain a dictionary of anomaly flags for each vehicle
@@ -656,7 +661,9 @@ class CarlaEnv:
         vehicle_index = self.vehicle_id_to_index[vehicle.id]
         # Processing camera data # MODIFIED modify for multi agent
         camera_data = self.retrieve_camera_data(vehicle_id=vehicle.id) #MODIFIED need to modify for passing in specific vehicle, this might be unnecessary
-        hazards_detected = self.detect_hazards_for_vehicle(vehicle=vehicle) #MODIFIED switch to detect_hazard_for_vehicle
+        # hazards_detected = self.detect_hazards_for_vehicle(vehicle=vehicle) #MODIFIED switch to detect_hazard_for_vehicle
+        hazards_detected = self.detect_anomaly_for_vehicle(vehicle=vehicle) #MODIFIED switch to detect_hazard_for_vehicle
+        # switch for max logit
 
         # Update the anomaly flag based on hazard detection
         self.anomaly_flags[vehicle_index] = hazards_detected
@@ -725,27 +732,46 @@ class CarlaEnv:
         return hazard_detected, vehicle_location
 
 
-    def detect_maxlogit_ood_hazards_for_vehicle(self, vehicle):
+    def detect_anomaly_for_vehicle(self, vehicle, anomaly_class_idx=12, anomaly_threshold=0.5, min_anomaly_area=0.05):
         """
-        Detect hazards for a specific vehicle and get its location.
+        Detect anomalies for a specific vehicle and get its location, 
+        requiring a minimum percentage of the image area to be classified as anomalous.
+
+        Args:
+        - vehicle: The vehicle object to detect anomalies for.
+        - anomaly_class_idx (int): The index of the anomaly class in the model's output.
+        - anomaly_threshold (float): The threshold for detecting anomalies.
+        - min_anomaly_area (float): Minimum required area of the image that must be classified as anomaly.
+
+        Returns:
+        - anomaly_detected (bool): Whether an anomaly is detected.
+        - vehicle_location (tuple): The location of the vehicle.
         """
         # Retrieve and process the image data
         image_data = self.retrieve_camera_data(vehicle.id)
         pil_image = Image.fromarray(image_data).convert('RGB')
-        input_tensor = self.transform(pil_image).unsqueeze(0).to('cuda:1')
+        input_tensor = self.transform(pil_image).unsqueeze(0).to(device)
 
         # Forward pass through the anomaly detection model
         with torch.no_grad():
             outputs = self.anomaly_detection_model(input_tensor)
-            # Apply the max-logit strategy for anomaly detection
-            max_logits, _ = torch.max(outputs, dim=1)
-            hazard_detected = torch.any(max_logits > 0.5)  # Threshold for anomaly detection
+
+            # Get the probability of the anomaly class
+            softmax = torch.nn.Softmax(dim=1)
+            probabilities = softmax(outputs)
+            anomaly_probabilities = probabilities[:, anomaly_class_idx]
+
+            # Check the percentage of the image predicted as an anomaly
+            anomaly_area = torch.mean((anomaly_probabilities > anomaly_threshold).float())
+            anomaly_detected = anomaly_area > min_anomaly_area
 
         # Get the vehicle's location
         vehicle_info_dict = self.get_vehicle_info(vehicle)
         vehicle_location = vehicle_info_dict["location"]
 
-        return hazard_detected, vehicle_location
+        return anomaly_detected, vehicle_location
+
+
     
     def check_done(self, max_timesteps=None, current_timestep=None):
         """
